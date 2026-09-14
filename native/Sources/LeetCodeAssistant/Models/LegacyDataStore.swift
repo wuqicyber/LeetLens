@@ -523,6 +523,11 @@ final class LegacyDataStore {
     /// Performs the initial load exactly once. Safe to call from every `.task`.
     func hydrate() async {
         ensureLoaded()
+        if learningRecords.isEmpty && hasPendingLearningAnalysis {
+            Task {
+                await syncPendingLearningAnalyses()
+            }
+        }
     }
 
     /// Guarantees the in-memory snapshot reflects disk before a read-modify-write.
@@ -2041,6 +2046,46 @@ final class LegacyDataStore {
                 )
             }
         return (messages, Array(context), fingerprint, selected.map(\.1))
+    }
+
+    var hasPendingLearningAnalysis: Bool {
+        conversations.contains { pendingLearningAnalysis(for: $0.id) != nil }
+    }
+
+    func analyzeLearningIfNeeded(for conversationID: String) async {
+        guard let batch = pendingLearningAnalysis(for: conversationID) else { return }
+        do {
+            let result = try await ChatService(dataDirectory: dataDirectory).analyzeLearning(
+                conversationID: conversationID,
+                messages: batch.messages,
+                priorContext: batch.context,
+                fingerprint: batch.fingerprint,
+                messageVersions: batch.versions,
+                providerID: settings.taskRoutes["learning"]
+            )
+            try await mergeLearningAnalysis(
+                conversationID: conversationID,
+                result: result,
+                messages: batch.messages
+            )
+        } catch {
+            NSLog("Learning analysis failed for %@: %@", conversationID, error.localizedDescription)
+        }
+    }
+
+    func syncPendingLearningAnalyses() async {
+        for conversation in conversations {
+            var iterations = 0
+            while pendingLearningAnalysis(for: conversation.id) != nil && iterations < 10 {
+                iterations += 1
+                let before = pendingLearningAnalysis(for: conversation.id)?.versions.count ?? 0
+                await analyzeLearningIfNeeded(for: conversation.id)
+                let after = pendingLearningAnalysis(for: conversation.id)?.versions.count ?? 0
+                if after >= before {
+                    break
+                }
+            }
+        }
     }
 
     func mergeLearningAnalysis(

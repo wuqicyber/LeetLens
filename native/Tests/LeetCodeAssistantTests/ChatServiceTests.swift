@@ -24,6 +24,24 @@ final class ChatServiceTests: XCTestCase {
         XCTAssertNotEqual(ChatService.locateElectronExecutable(dataDirectory: directory)?.path, "/nonexistent/Electron")
     }
 
+    func testNodeBridgeHintResolvesOutsideRepo() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "node-bridge-hint-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fake = directory.appending(path: "node")
+        try "#!/bin/sh\n".write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+
+        try #"{"path":"\#(fake.path)"}"#
+            .write(to: directory.appending(path: "node-bridge.json"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(ChatService.locateNodeExecutable(dataDirectory: directory)?.path, fake.path)
+
+        let runtime = ChatService.locateJavaScriptRuntime(dataDirectory: directory)
+        XCTAssertEqual(runtime, .node(fake))
+    }
+
     func testResponsesCompletedEventTerminatesStreamWithoutWaitingForDoneSentinel() {
         XCTAssertTrue(ChatService.isTerminalStreamEvent(
             eventName: "response.completed",

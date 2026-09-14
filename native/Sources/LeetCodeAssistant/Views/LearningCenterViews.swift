@@ -9,6 +9,7 @@ struct LearningLibraryWorkspaceView: View {
     @State private var category = "全部"
     /// 从别处跳进来时要滚到的目标；滚完置空。
     @State private var pendingScrollTarget: String?
+    @State private var isSyncing = false
 
     private var categories: [String] {
         ["全部"] + Set(dataStore.learningRecords.map(\.primaryKnowledge)).sorted()
@@ -166,11 +167,33 @@ struct LearningLibraryWorkspaceView: View {
                 LearningRecordDetailView(record: record, workspace: workspace, dataStore: dataStore)
                     .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ContentUnavailableView(
-                    "还没有学习记录",
-                    systemImage: "books.vertical",
-                    description: Text("任务集合在“任务工作台”；这里展示 Agent 从对话、提交和复习中沉淀的薄弱点与学习记录。")
-                )
+                ContentUnavailableView {
+                    Label("还没有学习记录", systemImage: "books.vertical")
+                } description: {
+                    Text("任务集合在“任务工作台”；这里展示 Agent 从对话、提交和复习中沉淀的薄弱点与学习记录。")
+                } actions: {
+                    if dataStore.hasPendingLearningAnalysis {
+                        Button {
+                            guard !isSyncing else { return }
+                            isSyncing = true
+                            Task {
+                                await dataStore.syncPendingLearningAnalyses()
+                                isSyncing = false
+                            }
+                        } label: {
+                            if isSyncing {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text("正在从对话中提炼学习记录…")
+                                }
+                            } else {
+                                Label("从现有对话中提炼学习记录", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isSyncing)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -179,6 +202,13 @@ struct LearningLibraryWorkspaceView: View {
             // 原来无条件 `selectedID = records.first?.id`，从洞察页点进来的目标当场被覆盖。
             adoptExternalSelection()
             if selectedID == nil { selectedID = records.first?.id }
+            if dataStore.learningRecords.isEmpty && dataStore.hasPendingLearningAnalysis && !isSyncing {
+                isSyncing = true
+                Task {
+                    await dataStore.syncPendingLearningAnalyses()
+                    isSyncing = false
+                }
+            }
         }
         .onChange(of: workspace.selectedLearningRecordID) { _, _ in
             adoptExternalSelection()
@@ -186,7 +216,16 @@ struct LearningLibraryWorkspaceView: View {
         // 再点一次同一道题时 selectedLearningRecordID 没变，上面那条不会触发；
         // 视图又是常驻的（onAppear 也不再走），所以按"进入本页"这个事件补一次。
         .onChange(of: workspace.selectedSection) { _, section in
-            if section == .library { adoptExternalSelection() }
+            if section == .library {
+                adoptExternalSelection()
+                if dataStore.learningRecords.isEmpty && dataStore.hasPendingLearningAnalysis && !isSyncing {
+                    isSyncing = true
+                    Task {
+                        await dataStore.syncPendingLearningAnalyses()
+                        isSyncing = false
+                    }
+                }
+            }
         }
         .onChange(of: selectedID) { _, newValue in
             // 本地选中也要写回：其它页面（开始练习、新建任务的关联项）读的是这个。

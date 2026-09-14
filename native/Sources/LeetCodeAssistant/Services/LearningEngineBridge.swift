@@ -16,10 +16,12 @@ enum LearningEngineBridgeError: LocalizedError {
 
 actor LearningEngineBridge {
     private static let marker = "__LEARNING_ENGINE__"
+    private let dataDirectory: URL
     private let learningFile: URL
 
     init(dataDirectory: URL) {
-        learningFile = dataDirectory.appending(path: "learning.json")
+        self.dataDirectory = dataDirectory
+        self.learningFile = dataDirectory.appending(path: "learning.json")
     }
 
     func mergeAnalysis(
@@ -120,7 +122,7 @@ actor LearningEngineBridge {
     }
 
     private func run(_ input: [String: Any]) async throws {
-        guard let electronURL = ChatService.locateElectronExecutable(),
+        guard let runtime = ChatService.locateJavaScriptRuntime(dataDirectory: dataDirectory),
               let helperURL = Bundle.appResources.url(
                 forResource: "learning-engine-bridge",
                 withExtension: "cjs",
@@ -129,12 +131,10 @@ actor LearningEngineBridge {
         else { throw LearningEngineBridgeError.unavailable }
 
         let inputData = try JSONSerialization.data(withJSONObject: input)
-        var environment = ProcessInfo.processInfo.environment
-        environment["ELECTRON_RUN_AS_NODE"] = "1"
         let result = try await SubprocessRunner.run(
-            executableURL: electronURL,
+            executableURL: runtime.executableURL,
             arguments: [helperURL.path, learningFile.path],
-            environment: environment,
+            environment: runtime.environment,
             standardInput: inputData,
             timeout: 15
         )

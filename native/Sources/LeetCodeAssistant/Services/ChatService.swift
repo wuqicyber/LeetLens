@@ -1,5 +1,28 @@
 import Foundation
 
+enum JavaScriptRuntime: Sendable, Equatable {
+    case node(URL)
+    case electron(URL)
+
+    var executableURL: URL {
+        switch self {
+        case .node(let url), .electron(let url):
+            return url
+        }
+    }
+
+    var environment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        switch self {
+        case .node:
+            break
+        case .electron:
+            env["ELECTRON_RUN_AS_NODE"] = "1"
+        }
+        return env
+    }
+}
+
 struct ChatRequestMessage: Sendable {
     let role: String
     let content: String
@@ -1465,6 +1488,74 @@ final class ChatService: @unchecked Sendable {
            let message = error["message"] as? String,
            !message.isEmpty { return message }
         return "模型服务返回 HTTP \(status)"
+    }
+
+    static func locateNodeExecutable(dataDirectory: URL? = nil) -> URL? {
+        if let explicit = ProcessInfo.processInfo.environment["LEETCODE_NODE_PATH"] ?? ProcessInfo.processInfo.environment["NODE_PATH"],
+           FileManager.default.isExecutableFile(atPath: explicit) {
+            return URL(filePath: explicit)
+        }
+        if let hinted = hintedNodePath(in: dataDirectory),
+           FileManager.default.isExecutableFile(atPath: hinted.path) {
+            return hinted
+        }
+        let standardCandidates = [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/opt/homebrew/opt/node/bin/node",
+            "/opt/homebrew/opt/node@22/bin/node",
+            "/opt/homebrew/opt/node@20/bin/node",
+            "/opt/homebrew/opt/node@18/bin/node",
+            "/usr/bin/node"
+        ]
+        for candidate in standardCandidates {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                let url = URL(filePath: candidate)
+                rememberNodePath(url, in: dataDirectory)
+                return url
+            }
+        }
+        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
+            for dir in pathEnv.split(separator: ":") {
+                let candidate = URL(filePath: String(dir)).appending(path: "node")
+                if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                    rememberNodePath(candidate, in: dataDirectory)
+                    return candidate
+                }
+            }
+        }
+        return nil
+    }
+
+    static func locateJavaScriptRuntime(dataDirectory: URL? = nil) -> JavaScriptRuntime? {
+        if let node = locateNodeExecutable(dataDirectory: dataDirectory) {
+            return .node(node)
+        }
+        if let electron = locateElectronExecutable(dataDirectory: dataDirectory) {
+            return .electron(electron)
+        }
+        return nil
+    }
+
+    private static func nodeHintURL(in dataDirectory: URL?) -> URL? {
+        dataDirectory?.appending(path: "node-bridge.json")
+    }
+
+    private static func hintedNodePath(in dataDirectory: URL?) -> URL? {
+        guard let url = nodeHintURL(in: dataDirectory),
+              let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = root["path"] as? String
+        else { return nil }
+        return URL(filePath: path)
+    }
+
+    private static func rememberNodePath(_ url: URL, in dataDirectory: URL?) {
+        guard let hint = nodeHintURL(in: dataDirectory) else { return }
+        let payload = ["path": url.path]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+        try? data.write(to: hint, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: hint.path)
     }
 
     static func locateElectronExecutable(dataDirectory: URL? = nil) -> URL? {

@@ -395,24 +395,7 @@ struct ConversationWorkspaceView: View {
     }
 
     private func analyzeLearningIfNeeded(_ conversationID: String) async {
-        guard let batch = dataStore.pendingLearningAnalysis(for: conversationID) else { return }
-        do {
-            let result = try await ChatService(dataDirectory: dataStore.dataDirectory).analyzeLearning(
-                conversationID: conversationID,
-                messages: batch.messages,
-                priorContext: batch.context,
-                fingerprint: batch.fingerprint,
-                messageVersions: batch.versions,
-                providerID: dataStore.settings.taskRoutes["learning"]
-            )
-            try await dataStore.mergeLearningAnalysis(
-                conversationID: conversationID,
-                result: result,
-                messages: batch.messages
-            )
-        } catch {
-            NSLog("Learning analysis failed: %@", error.localizedDescription)
-        }
+        await dataStore.analyzeLearningIfNeeded(for: conversationID)
     }
 
     private func cancelGeneration() {
