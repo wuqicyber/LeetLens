@@ -1,0 +1,30 @@
+native/Sources/LeetCodeAssistant/App/ResourceBundle.swift
+  h_0cc3b7d7475c37 1-20
+native/Sources/LeetCodeAssistant/Design/SharedControls.swift
+  h_0cc3b7d7475c37 46-47
+native/Sources/LeetCodeAssistant/Services/ChatService.swift
+  h_0cc3b7d7475c37 908,912
+native/Sources/LeetCodeAssistant/Services/LearningEngineBridge.swift
+  h_0cc3b7d7475c37 124,128
+native/Sources/LeetCodeAssistant/Views/KnowledgeGraphWebView.swift
+  h_0cc3b7d7475c37 70-71,73-74,164-173
+native/Sources/LeetCodeAssistant/Views/LeetCodeCodeEditor.swift
+  h_0cc3b7d7475c37 101-102
+native/Sources/LeetCodeAssistant/Views/LeetCodeSolutionViews.swift
+  h_0cc3b7d7475c37 244-245
+native/Sources/LeetCodeAssistant/Views/LeetCodeWorkspaceView.swift
+  h_0cc3b7d7475c37 1858,1862
+native/Sources/LeetCodeAssistant/Views/RichConversationWebView.swift
+  h_0cc3b7d7475c37 114,118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "af37ef1eb40bdff30818eeac59ebaea5c54b7ed4",
+  "prompts": {},
+  "humans": {
+    "h_0cc3b7d7475c37": {
+      "author": "eleanor.zhu <eleanore.zhu@gmail.com>"
+    }
+  }
+}
