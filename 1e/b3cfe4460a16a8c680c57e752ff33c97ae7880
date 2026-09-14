@@ -1,0 +1,84 @@
+leetcode-ai-ecosystem-research-2026-09-07.md
+  h_0cc3b7d7475c37 1-171
+native/App/Info.plist
+  h_0cc3b7d7475c37 8,18
+native/Sources/LeetCodeAssistant/App/LeetCodeAssistantApp.swift
+  h_0cc3b7d7475c37 30
+native/Sources/LeetCodeAssistant/App/ResourceBundle.swift
+  h_0cc3b7d7475c37 1-17
+native/Sources/LeetCodeAssistant/Design/SharedControls.swift
+  h_0cc3b7d7475c37 46-47
+native/Sources/LeetCodeAssistant/Models/LeetCodeDraftStore.swift
+  h_0cc3b7d7475c37 1-102
+native/Sources/LeetCodeAssistant/Models/LeetCodeWorkbench.swift
+  h_0cc3b7d7475c37 1-102
+native/Sources/LeetCodeAssistant/Models/LegacyDataStore.swift
+  h_0cc3b7d7475c37 69-70,484,505,513,627-647,649-680,1375-1385,1468-1473,1487-1491,1502-1507,1513-1544,1644,2216-2225,2265-2267,2368-2373,2631,2791
+native/Sources/LeetCodeAssistant/Models/WorkspaceState.swift
+  h_0cc3b7d7475c37 22-28,36,148-156,165-166,284-287,637-740,842
+native/Sources/LeetCodeAssistant/Resources/CodeEditor/editor.html
+  h_0cc3b7d7475c37 25-30,32-35,408-415,492-495,510-517
+native/Sources/LeetCodeAssistant/Resources/RichContent/code-block.css
+  h_0cc3b7d7475c37 90-95
+native/Sources/LeetCodeAssistant/Resources/RichContent/conversation.html
+  h_0cc3b7d7475c37 16,38
+native/Sources/LeetCodeAssistant/Services/AgentDataSnapshot.swift
+  h_0cc3b7d7475c37 87,90-91,108,153-174,176-178,180-184,188,213
+native/Sources/LeetCodeAssistant/Services/ChatService.swift
+  h_0cc3b7d7475c37 908,912
+native/Sources/LeetCodeAssistant/Services/LearningAgentTools.swift
+  h_0cc3b7d7475c37 10,79-87,311-312,316-333
+native/Sources/LeetCodeAssistant/Services/LearningEngineBridge.swift
+  h_0cc3b7d7475c37 124,128
+native/Sources/LeetCodeAssistant/Services/LeetCodeAPIClient.swift
+  h_0cc3b7d7475c37 6-7,12,21-24,101-129,132,135-136,139-142,147-199,491-497,501-511,514,549,642-645,648-650,657-658,661-667,691,755-779
+native/Sources/LeetCodeAssistant/Services/LeetCodeProblemInput.swift
+  h_0cc3b7d7475c37 1-46
+native/Sources/LeetCodeAssistant/Services/LeetCodeStudyPlanInput.swift
+  h_0cc3b7d7475c37 1-32
+native/Sources/LeetCodeAssistant/Views/ConversationWorkspaceView.swift
+  h_0cc3b7d7475c37 10-20,25,29-30,32,41-42,48,55-66,77-79,81,91-92,95-96,98-99,110,112,116,125,130,175,177,188,197-198,232-233,271-272,286,423,427,429,478,483-484,497,511-514,518,520-541,554-562,580,583-585,625-629,927-928,930-931,956,969-974,976,980-989,1010-1072,1099,1309,1351
+native/Sources/LeetCodeAssistant/Views/GlobalSidebarView.swift
+  h_0cc3b7d7475c37 11,31,62,78-79,87-89,135,271-272,275-279,301-326,336
+native/Sources/LeetCodeAssistant/Views/KnowledgeGraphWebView.swift
+  h_0cc3b7d7475c37 70-71,73-74,164-173
+native/Sources/LeetCodeAssistant/Views/LearningCenterViews.swift
+  h_0cc3b7d7475c37 169-174
+native/Sources/LeetCodeAssistant/Views/LeetCodeCodeEditor.swift
+  h_0cc3b7d7475c37 69,98,103-104,114,248
+native/Sources/LeetCodeAssistant/Views/LeetCodeSolutionViews.swift
+  h_0cc3b7d7475c37 244-245
+native/Sources/LeetCodeAssistant/Views/LeetCodeWorkspaceView.swift
+  h_0cc3b7d7475c37 8-11,20-22,28-29,46-47,67-89,91,105-115,128,131,136,144-168,183-186,191-192,201-202,205-206,217-256,258-265,267-279,282-289,291-292,295,297-308,310-325,327,330-344,358-367,369,371-376,378-386,390-404,627,692,717-720,722-737,739-746,748-825,827-840,854-888,892-924,926-936,939-983,985-1026,1029-1030,1051,1309,1311,1314,1319,1329-1330,1335-1336,1360-1363,1365,1368-1375,1380-1381,1383-1392,1409,1668,1671-1679,1692-1694,1696-1711,1714-1716,1718,1720,1724-1725,1749-1750,1855,1860-1862,1865-1869,1876-1877,1880-1885,1887,1988,2052,2095-2165,2183,2199,2207,2273,2277,2299-2427
+native/Sources/LeetCodeAssistant/Views/RichConversationWebView.swift
+  h_0cc3b7d7475c37 25-26,40,62,66,76,82-83,93,101,110-111,116,127,131,143,167-179,320,324
+native/Sources/LeetCodeAssistant/Views/RootWorkspaceView.swift
+  h_0cc3b7d7475c37 29-31,59,67,694
+native/Sources/LeetCodeAssistant/Views/SettingsView.swift
+  h_0cc3b7d7475c37 2380,2389
+native/Tests/LeetCodeAssistantTests/OpenAnyProblemTests.swift
+  h_0cc3b7d7475c37 1-438
+native/Tests/LeetCodeAssistantTests/WorkbenchInteractionTests.swift
+  h_0cc3b7d7475c37 1-457
+native/Tests/LeetCodeAssistantTests/WorkspaceTaskTests.swift
+  h_0cc3b7d7475c37 1-253
+native/scripts/build-preview-app.sh
+  h_0cc3b7d7475c37 19-20,22,25,49-59,62,66
+native/scripts/build-release-app.sh
+  h_0cc3b7d7475c37 16,59-69,72,79,116,121
+native/scripts/generate-app-icon.swift
+  h_0cc3b7d7475c37 11,36-40,57-60,63-64
+report-source.md
+  h_0cc3b7d7475c37 1-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "1eb3cfe4460a16a8c680c57e752ff33c97ae7880",
+  "prompts": {},
+  "humans": {
+    "h_0cc3b7d7475c37": {
+      "author": "eleanor.zhu <eleanore.zhu@gmail.com>"
+    }
+  }
+}
