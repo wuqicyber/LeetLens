@@ -1,0 +1,22 @@
+native/Sources/LeetCodeAssistant/Services/LeetCodeAPIClient.swift
+  h_0cc3b7d7475c37 71,486,509-512,514-531,539-550,600,606,612-631
+src/main/main.js
+  h_0cc3b7d7475c37 2127-2144,2155-2172,2187-2188,2190-2191
+native/Sources/LeetCodeAssistant/Views/KnowledgeGraphWebView.swift
+  h_0cc3b7d7475c37 164-173
+native/Sources/LeetCodeAssistant/Views/LeetCodeWorkspaceView.swift
+  h_0cc3b7d7475c37 1473-1474
+native/Tests/LeetCodeAssistantTests/LeetCodeCorrectnessTests.swift
+  h_0cc3b7d7475c37 159-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "3a07d63b5f85203b197578f10152e13a9670919c",
+  "prompts": {},
+  "humans": {
+    "h_0cc3b7d7475c37": {
+      "author": "eleanor.zhu <eleanore.zhu@gmail.com>"
+    }
+  }
+}
