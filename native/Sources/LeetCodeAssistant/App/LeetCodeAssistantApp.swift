@@ -27,7 +27,7 @@ struct LeetCodeAssistantApp: App {
     }
 
     var body: some Scene {
-        Window("LeetLens", id: "main") {
+        Window("Agent Workspace", id: "main") {
             RootWorkspaceView()
                 .frame(minWidth: 820, minHeight: 620)
         }

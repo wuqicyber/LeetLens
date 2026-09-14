@@ -16,12 +16,13 @@ if [[ -z ${XCODE_PATH:-} ]]; then
     fi
 fi
 DEVELOPER_DIR=${XCODE_PATH}/Contents/Developer
-APP_PATH=${NATIVE_DIR}/.build/LeetLens\ Preview.app
+APP_NAME='Agent Workspace'
+APP_PATH=${NATIVE_DIR}/.build/${APP_NAME}.app
 # 让 Spotlight 别索引这份构建产物。它和 /Applications 里装的那份只差一个显示名，
-# 被索引之后 Launchpad 与聚焦里会并排冒出好几个 LeetLens，看着像装了好多版本。
+# 被索引之后 Launchpad 与聚焦里会并排冒出好几个应用，看着像装了好多版本。
 touch ${NATIVE_DIR}/.build/.metadata_never_index
 STAGE_ROOT=${TMPDIR:-/tmp}/leetcode-ai-helper-preview-stage
-STAGE_APP=${STAGE_ROOT}/LeetLens\ Preview.app
+STAGE_APP=${STAGE_ROOT}/${APP_NAME}.app
 CONTENTS_PATH=${STAGE_APP}/Contents
 SCRATCH_PATH=${TMPDIR:-/tmp}/leetcode-ai-helper-native-build
 ICONSET_PATH=${NATIVE_DIR}/IconSources/AppIcon.iconset
@@ -45,13 +46,24 @@ COPYFILE_DISABLE=1 DEVELOPER_DIR=${DEVELOPER_DIR} xcrun swift build -c debug --s
     -Xlinker -platform_version -Xlinker macos \
     -Xlinker ${MACOS_MIN_VERSION} -Xlinker ${MACOS_SDK_VERSION}
 
+BIN_PATH=$(DEVELOPER_DIR=${DEVELOPER_DIR} xcrun swift build -c debug --scratch-path ${SCRATCH_PATH} --show-bin-path 2>/dev/null || true)
+if [[ -f ${SCRATCH_PATH}/out/Products/Debug/LeetCodeAssistant ]]; then
+    PRODUCTS_DIR=${SCRATCH_PATH}/out/Products/Debug
+elif [[ -n ${BIN_PATH} && -f ${BIN_PATH}/LeetCodeAssistant ]]; then
+    PRODUCTS_DIR=${BIN_PATH}
+elif [[ -f ${SCRATCH_PATH}/debug/LeetCodeAssistant ]]; then
+    PRODUCTS_DIR=${SCRATCH_PATH}/debug
+else
+    PRODUCTS_DIR=$(dirname $(find ${SCRATCH_PATH} -name LeetCodeAssistant -type f | head -1))
+fi
+
 rm -rf ${STAGE_APP}
 mkdir -p ${CONTENTS_PATH}/MacOS ${CONTENTS_PATH}/Resources
-cp ${SCRATCH_PATH}/out/Products/Debug/LeetCodeAssistant ${CONTENTS_PATH}/MacOS/LeetCodeAssistant
+cp ${PRODUCTS_DIR}/LeetCodeAssistant ${CONTENTS_PATH}/MacOS/LeetCodeAssistant
 cp ${NATIVE_DIR}/App/Info.plist ${CONTENTS_PATH}/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date +%Y%m%d%H%M%S)" ${CONTENTS_PATH}/Info.plist
 
-for RESOURCE_BUNDLE in ${SCRATCH_PATH}/out/Products/Debug/*.bundle; do
+for RESOURCE_BUNDLE in ${PRODUCTS_DIR}/*.bundle; do
     [[ -d ${RESOURCE_BUNDLE} ]] || continue
     cp -R ${RESOURCE_BUNDLE} ${CONTENTS_PATH}/Resources/
 done

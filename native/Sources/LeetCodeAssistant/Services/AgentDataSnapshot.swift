@@ -84,9 +84,11 @@ struct AgentDataSnapshot: Sendable {
         let isCompleted: Bool
     }
 
-    struct SlugTitle: Sendable {
+    struct SlugTitle: Sendable, Equatable {
         let slug: String
         let title: String
+        var frontendID = ""
+        var englishTitle = ""
     }
 
     struct MemoryMatch: Sendable {
@@ -103,7 +105,7 @@ struct AgentDataSnapshot: Sendable {
     var weakCount = 0
     var planSummaryLine = ""
     var progressSummaryLine = ""
-    /// 题单里的 (slug, 标题)，只用来把模型给的中文题名解析成 slug。
+    /// All synced collections and cached workspaces, including both titles and the displayed ID.
     var questionIndex: [SlugTitle] = []
     var progressMetrics: [Metric] = []
     var planProgress: [PlanProgress] = []
@@ -148,24 +150,42 @@ struct AgentDataSnapshot: Sendable {
     /// 把「和为 K 的子数组」「subarray-sum-equals-k」这类输入解析成 titleSlug。
     /// 模型给的多半是中文题名，力扣接口只认 slug。
     func resolveSlug(_ query: String) -> String? {
-        let needle = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return nil }
-        if problemsBySlug[needle] != nil { return needle }
-        if let exact = questionIndex.first(where: { $0.slug == needle || $0.title.lowercased() == needle }) {
-            return exact.slug
+        try? resolveProblem(query).slug
+    }
+
+    func resolveProblem(_ query: String) throws -> SlugTitle {
+        let index = (questionIndex + problemsBySlug.values.map { SlugTitle(slug: $0.slug, title: $0.title) })
+        guard let match = try Self.matchProblem(LeetCodeProblemInput(query), in: index) else {
+            throw LeetCodeAPIError.problemNotFound(query)
         }
-        if let partial = questionIndex.first(where: { $0.title.lowercased().contains(needle) }) {
-            return partial.slug
+        return match
+    }
+
+    static func matchProblem(
+        _ input: LeetCodeProblemInput, in index: [SlugTitle], allowPartial: Bool = true
+    ) throws -> SlugTitle? {
+        let needle = input.query.lowercased()
+        let valid = index.filter { LeetCodeProblemInput.isValidSlug($0.slug) }
+        let exact = valid.filter {
+            if input.isNumber { return $0.frontendID == input.query }
+            if let slug = input.explicitSlug { return $0.slug == slug }
+            return $0.slug == input.query || [$0.title, $0.frontendID, $0.englishTitle].contains {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == needle
+            }
         }
-        return problem(matching: query)?.slug
+        let matches = !exact.isEmpty ? exact : valid.filter {
+            allowPartial && !input.isNumber && input.explicitSlug == nil
+                && ($0.title.lowercased().contains(needle) || $0.englishTitle.lowercased().contains(needle))
+        }
+        guard let match = matches.first else { return nil }
+        guard Set(matches.map(\.slug)).count == 1 else {
+            throw LeetCodeAPIError.ambiguousProblem(input.query)
+        }
+        return match
     }
 
     func problem(matching query: String) -> Problem? {
-        let needle = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return nil }
-        if let exact = problemsBySlug[needle] { return exact }
-        return problemsBySlug.values.first { $0.title.lowercased().contains(needle) }
-            ?? problemsBySlug.values.first { $0.slug.contains(needle) }
+        resolveSlug(query).flatMap { problemsBySlug[$0] }
     }
 
     // MARK: - 构造
@@ -190,9 +210,7 @@ struct AgentDataSnapshot: Sendable {
             .map(Self.task(from:))
 
         snapshot.problemsBySlug = Self.problems(from: dataStore)
-        snapshot.questionIndex = dataStore.leetCodeQuestions.map {
-            SlugTitle(slug: $0.titleSlug, title: $0.title)
-        }
+        snapshot.questionIndex = dataStore.leetCodeQuestionIndex
         snapshot.progressMetrics = Self.metrics(from: dataStore)
         snapshot.progressSummaryLine = Self.progressSummary(from: dataStore)
         snapshot.planProgress = dataStore.leetCodePlans.prefix(6).map { plan in

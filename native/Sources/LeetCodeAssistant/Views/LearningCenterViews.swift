@@ -166,8 +166,12 @@ struct LearningLibraryWorkspaceView: View {
                 LearningRecordDetailView(record: record, workspace: workspace, dataStore: dataStore)
                     .frame(minWidth: 500, maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ContentUnavailableView("没有符合条件的学习项", systemImage: "books.vertical")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ContentUnavailableView(
+                    "还没有学习记录",
+                    systemImage: "books.vertical",
+                    description: Text("任务集合在“任务工作台”；这里展示 Agent 从对话、提交和复习中沉淀的薄弱点与学习记录。")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear {

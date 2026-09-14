@@ -7,7 +7,7 @@ import Foundation
 /// 结果后再决定要不要接着查。Chat Completions 与 Responses 两种函数调用协议
 /// 都支持；供应商内置的联网工具仍由后端执行，和这些本地函数互不替代。
 ///
-/// **只读**。写学习档案的路径一律不放进来：`learning.json` / `study-plan.json`
+/// 除直接导航的 open_problem 外，工具只读。写学习档案的路径一律不放进来：`learning.json` / `study-plan.json`
 /// 与 Electron 版共用同一份文件且没有文件锁，让模型无确认地写进去，
 /// 出问题时既难发现也难回滚。
 enum LearningAgentTools {
@@ -76,6 +76,15 @@ enum LearningAgentTools {
     }
 
     static let definitions: [Definition] = [
+        Definition(
+            name: "open_problem",
+            title: "打开题目",
+            description: "在任务工作台直接打开任意力扣中国站题目。query 支持题号（如 704）、中文/英文标题、titleSlug 或 https://leetcode.cn/problems/<slug>/ 链接。本地索引优先，未命中会在线解析；临时题不会自动加入集合。当用户要求打开、进入、开始做某题时必须调用，成功后直接导航，无需再点击卡片。找不到或有歧义会报错。",
+            parametersJSON: schema(
+                ["query": ["type": "string", "description": "题号、中文/英文标题、titleSlug 或力扣中国站题目 URL"]],
+                required: ["query"]
+            )
+        ),
         Definition(
             name: "search_learning_records",
             title: "学习题库",
@@ -299,10 +308,29 @@ enum LearningAgentTools {
         memorySearch: @Sendable (String) async -> [AgentDataSnapshot.MemoryMatch],
         solutionSearch: @Sendable (String) async -> [SolutionHit],
         solutionRead: @Sendable (String) async -> String?,
-        videoSearch: @Sendable (String) async -> [VideoHit]
+        videoSearch: @Sendable (String) async -> [VideoHit],
+        openProblem: (@MainActor @Sendable (String) async throws -> AgentDataSnapshot.SlugTitle)? = nil
     ) async -> Output {
         let parsed = parseArguments(arguments)
         switch name {
+        case "open_problem":
+            do {
+                try Task.checkCancellation()
+                guard let openProblem else {
+                    throw LeetCodeAPIError.invalidResponse("当前会话无法执行题目导航")
+                }
+                let problem = try await openProblem(parsed.string("query"))
+                return Output(payload: [
+                    "tool": name, "title": "打开题目", "layout": Layout.list.rawValue,
+                    "summary": "已在任务工作台打开「\(problem.title)」", "slug": problem.slug,
+                    "jumps": [AgentDataSnapshot.Jump(kind: "leetcode", id: problem.slug, label: "打开这道题").dictionary]
+                ])
+            } catch {
+                return Output(payload: [
+                    "tool": name, "title": "打开题目", "layout": Layout.list.rawValue,
+                    "error": error.localizedDescription, "items": []
+                ])
+            }
         case "search_learning_records":
             return searchLearningRecords(query: parsed.string("query"), limit: parsed.limit, snapshot: snapshot)
         case "get_problem_history":

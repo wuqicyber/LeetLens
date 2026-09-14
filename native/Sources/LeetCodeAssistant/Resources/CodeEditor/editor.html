@@ -22,17 +22,17 @@
     .CodeMirror-cursor { border-left-color: CanvasText; }
     .CodeMirror-selected { background: rgba(10,122,255,.22) !important; background: color-mix(in srgb, Highlight 30%, transparent) !important; }
     .CodeMirror-activeline-background { background: rgba(127,127,127,.045); background: color-mix(in srgb, CanvasText 3.5%, transparent); }
-    .cm-keyword { color: #a626a4; } .cm-def { color: #4078f2; } .cm-variable { color: CanvasText; }
-    .cm-variable-2 { color: #986801; } .cm-variable-3, .cm-type { color: #0184bc; }
-    .cm-number { color: #986801; } .cm-string, .cm-string-2 { color: #50a14f; }
-    .cm-comment { color: #7f848e; font-style: italic; }
-    .cm-operator { color: #383a42; }
-    .cm-builtin { color: #c18401; } .cm-meta { color: #4078f2; }
+    .cm-s-default .cm-keyword { color: #a626a4; } .cm-s-default .cm-def { color: #4078f2; } .cm-s-default .cm-variable { color: CanvasText; }
+    .cm-s-default .cm-variable-2 { color: #986801; } .cm-s-default .cm-variable-3, .cm-s-default .cm-type { color: #0184bc; }
+    .cm-s-default .cm-number { color: #986801; } .cm-s-default .cm-string, .cm-s-default .cm-string-2 { color: #50a14f; }
+    .cm-s-default .cm-comment { color: #7f848e; font-style: italic; }
+    .cm-s-default .cm-operator { color: #383a42; }
+    .cm-s-default .cm-builtin { color: #c18401; } .cm-s-default .cm-meta { color: #4078f2; }
     @media (prefers-color-scheme: dark) {
-      .cm-keyword { color: #c678dd; } .cm-def { color: #61afef; } .cm-variable-2 { color: #e5c07b; }
-      .cm-variable-3, .cm-type { color: #56b6c2; } .cm-number { color: #d19a66; }
-      .cm-string, .cm-string-2 { color: #98c379; } .cm-comment { color: #7f848e; }
-      .cm-operator { color: #abb2bf; } .cm-builtin { color: #e5c07b; } .cm-meta { color: #61afef; }
+      .cm-s-default .cm-keyword { color: #c678dd; } .cm-s-default .cm-def { color: #61afef; } .cm-s-default .cm-variable-2 { color: #e5c07b; }
+      .cm-s-default .cm-variable-3, .cm-s-default .cm-type { color: #56b6c2; } .cm-s-default .cm-number { color: #d19a66; }
+      .cm-s-default .cm-string, .cm-s-default .cm-string-2 { color: #98c379; } .cm-s-default .cm-comment { color: #7f848e; }
+      .cm-s-default .cm-operator { color: #abb2bf; } .cm-s-default .cm-builtin { color: #e5c07b; } .cm-s-default .cm-meta { color: #61afef; }
     }
     .diagnostic-gutter { width: 14px; }
     .diagnostic-marker { color: #e45649; font: 11px/1 -apple-system,sans-serif; cursor: default; }
@@ -193,7 +193,6 @@
     };
 
     let language = 'java';
-    let changeTimer = 0;
     let diagnosticTimer = 0;
     let remoteTimer = 0;
     let completionGeneration = 0;
@@ -406,6 +405,14 @@
     function showCompletion(cm, remoteItems = []) {
       cm.showHint({
         hint: instance => mergeRemoteCompletions(codeCompletionHint(instance, language), remoteItems),
+        extraKeys: {
+          Enter: (instance, handle) => {
+            const before = instance.getValue();
+            handle.pick();
+            // show-hint normally consumes Enter even for an identical candidate.
+            if (instance.getValue() === before) instance.execCommand('newlineAndIndent');
+          }
+        },
         completeSingle: false,
         closeOnUnfocus: true,
         alignWithWord: true,
@@ -482,8 +489,10 @@
     const contentHeight = () => Math.ceil(editor.getScrollInfo().height);
 
     editor.on('change', () => {
-      clearTimeout(changeTimer); clearTimeout(diagnosticTimer);
-      changeTimer = setTimeout(() => post('editorChanged', { code: editor.getValue(), contentHeight: contentHeight() }), 40);
+      // Keep the native draft current before a question/language switch destroys this WebView.
+      // Disk writes are debounced by the native draft store.
+      post('editorChanged', { code: editor.getValue(), contentHeight: contentHeight() });
+      clearTimeout(diagnosticTimer);
       diagnosticTimer = setTimeout(updateDiagnostics, 160);
     });
 
@@ -496,6 +505,14 @@
       if (/[\w$.]$/.test(inserted) && (prefix.length >= 1 || before.endsWith('.'))) complete(cm);
       else if (/\s$/.test(inserted) && constructorContext) complete(cm);
       else { completionGeneration += 1; clearTimeout(remoteTimer); }
+    });
+
+    editor.on('keydown', (cm, event) => {
+      if (event.isComposing || event.keyCode === 229) {
+        cm.closeHint();
+        // Let the browser/IME commit its composition, without a completion pick.
+        event.codemirrorIgnore = true;
+      }
     });
 
     window.editorBridge = {

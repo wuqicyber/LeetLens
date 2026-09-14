@@ -26,6 +26,9 @@ struct RootWorkspaceView: View {
         .onChange(of: dataStore.settings.alwaysOnTop) { _, value in
             applyWindowLevel(value)
         }
+        .onChange(of: dataStore.conversations.map(\.id)) { _, ids in
+            workspace.reconcileConversations(Set(ids))
+        }
         // 窗口出现之后才知道自己落在哪块屏上——`InterfaceMetrics` 初始化时只能问
         // `NSScreen.main`，那时窗口还没摆好，接了外接屏也算不出正确的自动档。
         .task {
@@ -53,6 +56,7 @@ struct RootWorkspaceView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else {
+                dataStore.leetCodeDrafts.flush()
                 // 用量账本现在按批 checkpoint，离开前台时补一次落盘，避免丢计数。
                 Task { await AIUsageLedger.shared.flush(dataDirectory: dataStore.dataDirectory) }
                 return
@@ -60,6 +64,7 @@ struct RootWorkspaceView: View {
             Task { await dataStore.syncLeetCodeAccountActivity() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            dataStore.leetCodeDrafts.flush()
             Task { await AIUsageLedger.shared.flush(dataDirectory: dataStore.dataDirectory) }
         }
         .sheet(isPresented: $workspace.isUsagePresented) {
@@ -686,7 +691,7 @@ private struct TrailingWindowChrome: View {
 
     private var chromeButtons: some View {
         HStack(spacing: 2) {
-            ShareLink(item: "LeetLens · 学习记录") {
+            ShareLink(item: "Agent Workspace · 工作记录") {
                 titlebarIcon("square.and.arrow.up")
             }
             .buttonStyle(.plain)

@@ -3,11 +3,13 @@ import WebKit
 
 enum LeetCodeAPIError: LocalizedError {
     case signedOut
+    case problemNotFound(String)
+    case ambiguousProblem(String)
     case invalidResponse(String, statusCode: Int? = nil)
 
     var statusCode: Int? {
         switch self {
-        case .signedOut: nil
+        case .signedOut, .problemNotFound, .ambiguousProblem: nil
         case let .invalidResponse(_, statusCode): statusCode
         }
     }
@@ -16,6 +18,10 @@ enum LeetCodeAPIError: LocalizedError {
         switch self {
         case .signedOut:
             "请先在账户连接中登录 LeetCode 中国站"
+        case .problemNotFound(let query):
+            "没有找到题目「\(query)」，题目可能不存在或已下架；请检查题号、完整标题或题目链接"
+        case .ambiguousProblem(let query):
+            "「\(query)」匹配到多道题或范围过大，请提供完整题号或题目链接"
         case let .invalidResponse(message, _):
             message
         }
@@ -92,17 +98,103 @@ final class LeetCodeAPIClient {
     private static let rootReferer = "https://leetcode.cn/"
     private static let graphQLPath = "/graphql/"
 
-    private init() {}
+    private let session: URLSession
+    private let cookies: @MainActor () async -> [HTTPCookie]
+
+    init(session: URLSession = .shared, cookies: @escaping @MainActor () async -> [HTTPCookie] = { await LeetCodeAPIClient.websiteCookies() }) {
+        self.session = session
+        self.cookies = cookies
+    }
+
+    func fetchStudyPlan(_ input: String) async throws -> (account: [String: Any], studyPlan: [String: Any]) {
+        let slug = try LeetCodeStudyPlanInput.slug(from: input)
+        let data = try await graphQL(query: Self.studyPlanQuery, variables: ["slug": slug])
+        return try Self.studyPlanSnapshot(from: data, slug: slug)
+    }
+
+    nonisolated static func studyPlanSnapshot(
+        from data: [String: Any], slug: String
+    ) throws -> (account: [String: Any], studyPlan: [String: Any]) {
+        guard let account = data["userStatus"] as? [String: Any], account["isSignedIn"] as? Bool == true else {
+            throw LeetCodeAPIError.signedOut
+        }
+        guard let plan = data["studyPlanV2Detail"] as? [String: Any], plan["slug"] as? String == slug else {
+            throw LeetCodeAPIError.invalidResponse("没有找到任务集合「\(slug)」，或当前账户没有访问权限")
+        }
+        guard let groups = plan["planSubGroups"] as? [[String: Any]],
+              groups.contains(where: { !(($0["questions"] as? [[String: Any]]) ?? []).isEmpty }) else {
+            throw LeetCodeAPIError.invalidResponse("任务集合没有可导入的题目，可能需要付费或额外访问权限")
+        }
+        return (account, plan)
+    }
 
     func fetchWorkspace(titleSlug: String) async throws -> [String: Any] {
+        guard LeetCodeProblemInput.isValidSlug(titleSlug) else { throw LeetCodeProblemInput.invalidInput }
         let data = try await graphQL(
             query: Self.workspaceQuery,
-            variables: ["titleSlug": titleSlug]
+            variables: ["titleSlug": titleSlug],
+            requiresAuth: false
         )
         guard let question = data["question"] as? [String: Any] else {
-            throw LeetCodeAPIError.invalidResponse("力扣没有返回可作答的题目")
+            throw LeetCodeAPIError.problemNotFound(titleSlug)
+        }
+        guard question["titleSlug"] as? String == titleSlug else {
+            throw LeetCodeAPIError.invalidResponse("力扣返回的题目标识不一致，已停止打开")
         }
         return try normalizeWorkspace(question)
+    }
+
+    /// Online fallback shared by manual opening and Agent actions. Return a full
+    /// workspace so a successful resolution is cached once, before navigating.
+    func resolveWorkspace(_ input: LeetCodeProblemInput) async throws -> [String: Any] {
+        if let slug = input.explicitSlug { return try await fetchWorkspace(titleSlug: slug) }
+        if !input.isNumber, LeetCodeProblemInput.isValidSlug(input.query) {
+            do { return try await fetchWorkspace(titleSlug: input.query) }
+            catch LeetCodeAPIError.problemNotFound { /* A one-word title can also look like a slug. */ }
+        }
+        var candidates: [AgentDataSnapshot.SlugTitle] = []
+        // ponytail: at most 500 search candidates; ask for an ID/URL for broader
+        // searches instead of downloading the whole catalogue to guess a title.
+        for skip in stride(from: 0, to: 500, by: 100) {
+            let data = try await graphQL(
+                query: Self.problemSearchQuery,
+                variables: ["categorySlug": "", "limit": 100, "skip": skip, "filters": ["searchKeywords": input.query]],
+                requiresAuth: false
+            )
+            guard let list = data["problemsetQuestionList"] as? [String: Any],
+                  let questions = list["questions"] as? [[String: Any]],
+                  let hasMore = list["hasMore"] as? Bool else {
+                throw LeetCodeAPIError.invalidResponse("力扣没有返回有效的题目搜索结果，请稍后重试")
+            }
+            let page = questions.compactMap { question -> AgentDataSnapshot.SlugTitle? in
+                guard let slug = question["titleSlug"] as? String, LeetCodeProblemInput.isValidSlug(slug) else { return nil }
+                return .init(slug: slug, title: question["titleCn"] as? String ?? question["title"] as? String ?? slug,
+                             frontendID: question["frontendQuestionId"] as? String ?? "", englishTitle: question["title"] as? String ?? "")
+            }
+            candidates += page
+            // Exact IDs/full titles beat fuzzy rankings (CN search can return
+            // thousands of loosely related hits even for "Binary Search").
+            if let exact = try AgentDataSnapshot.matchProblem(input, in: candidates, allowPartial: false) {
+                return try await resolvedWorkspace(exact)
+            }
+            if !hasMore {
+                guard let match = try AgentDataSnapshot.matchProblem(input, in: candidates) else {
+                    throw LeetCodeAPIError.problemNotFound(input.query)
+                }
+                return try await resolvedWorkspace(match)
+            }
+            guard !questions.isEmpty else { throw LeetCodeAPIError.invalidResponse("力扣搜索分页不完整，请改用题目链接") }
+        }
+        throw LeetCodeAPIError.ambiguousProblem(input.query)
+    }
+
+    private func resolvedWorkspace(_ reference: AgentDataSnapshot.SlugTitle) async throws -> [String: Any] {
+        let value = try await fetchWorkspace(titleSlug: reference.slug)
+        guard let question = value["question"] as? [String: Any],
+              question["frontendId"] as? String == reference.frontendID else {
+            throw LeetCodeAPIError.invalidResponse("力扣返回的题号与搜索结果不一致，已停止打开")
+        }
+        return value
     }
 
     /// 题面底部操作栏要的那几个数。点赞数、题解数、提示是公开的；
@@ -396,15 +488,30 @@ final class LeetCodeAPIClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: ["query": query, "variables": variables])
 
-        let (payload, response) = try await URLSession.shared.data(for: request)
+        let payload: Data
+        let response: URLResponse
+        do { (payload, response) = try await session.data(for: request) }
+        catch let error as URLError {
+            if error.code == .cancelled { throw CancellationError() }
+            throw LeetCodeAPIError.invalidResponse(error.code == .timedOut ? "力扣请求超时，请稍后重试" : "无法连接力扣，请检查网络后重试")
+        }
         guard let http = response as? HTTPURLResponse else {
             throw LeetCodeAPIError.invalidResponse("力扣服务没有返回有效响应")
         }
-        let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
-        if let error = (object?["errors"] as? [[String: Any]])?.first?["message"] as? String {
+        if http.statusCode == 401 { throw LeetCodeAPIError.signedOut }
+        if http.statusCode == 403 {
+            throw LeetCodeAPIError.invalidResponse("力扣拒绝访问，请检查登录状态及付费或访问权限", statusCode: 403)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw LeetCodeAPIError.invalidResponse(http.statusCode == 429 ? "力扣请求过于频繁，请稍后重试" : "力扣服务请求失败（\(http.statusCode)），请稍后重试", statusCode: http.statusCode)
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            throw LeetCodeAPIError.invalidResponse("力扣返回了无效数据，请稍后重试或重新登录")
+        }
+        if let error = (object["errors"] as? [[String: Any]])?.first?["message"] as? String {
             throw LeetCodeAPIError.invalidResponse(error)
         }
-        guard (200..<300).contains(http.statusCode), let data = object?["data"] as? [String: Any] else {
+        guard let data = object["data"] as? [String: Any] else {
             throw LeetCodeAPIError.invalidResponse("力扣服务请求失败（\(http.statusCode)）", statusCode: http.statusCode)
         }
         return data
@@ -439,7 +546,7 @@ final class LeetCodeAPIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let (payload, response) = try await URLSession.shared.data(for: request)
+        let (payload, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw LeetCodeAPIError.invalidResponse("力扣判题服务没有返回有效响应")
         }
@@ -532,17 +639,31 @@ final class LeetCodeAPIClient {
     }
 
     private func allLeetCodeCookies() async -> [HTTPCookie] {
+        await cookies()
+    }
+
+    private static func websiteCookies() async -> [HTTPCookie] {
         await withCheckedContinuation { continuation in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-                continuation.resume(returning: cookies.filter { $0.domain.contains("leetcode.cn") })
+                continuation.resume(returning: cookies.filter {
+                    $0.domain == "leetcode.cn" || $0.domain.hasSuffix(".leetcode.cn")
+                })
             }
         }
     }
 
     private func normalizeWorkspace(_ raw: [String: Any]) throws -> [String: Any] {
         let slug = raw["titleSlug"] as? String ?? ""
-        guard !slug.isEmpty, raw["questionId"] != nil else {
+        guard !slug.isEmpty, !Self.string(raw["questionId"]).isEmpty,
+              !(raw["questionFrontendId"] as? String ?? "").isEmpty else {
             throw LeetCodeAPIError.invalidResponse("力扣返回的题目数据不完整")
+        }
+        let content = [raw["translatedContent"], raw["content"]].compactMap { $0 as? String }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        guard !content.isEmpty else {
+            throw LeetCodeAPIError.invalidResponse(raw["isPaidOnly"] as? Bool == true
+                ? "这道题需要付费或访问权限，请在账户连接中登录有权限的力扣账户"
+                : "这道题暂时无法读取题面，可能已下架或受限")
         }
         let snippets = (raw["codeSnippets"] as? [[String: Any]] ?? []).compactMap { snippet -> [String: Any]? in
             let languageSlug = (snippet["langSlug"] as? String ?? "").lowercased()
@@ -567,7 +688,7 @@ final class LeetCodeAPIClient {
             "translatedTitle": raw["translatedTitle"] as? String ?? raw["title"] as? String ?? "",
             "titleSlug": slug,
             "difficulty": raw["difficulty"] as? String ?? "",
-            "content": raw["translatedContent"] as? String ?? raw["content"] as? String ?? "",
+            "content": content,
             "paidOnly": raw["isPaidOnly"] as? Bool ?? false,
             "enableRunCode": raw["enableRunCode"] as? Bool ?? true,
             "enableSubmit": raw["enableSubmit"] as? Bool ?? true,
@@ -630,6 +751,31 @@ final class LeetCodeAPIClient {
             lines[index..<min(lines.count, index + parameterCount)].joined(separator: "\n")
         }
     }
+
+    private static let problemSearchQuery = #"""
+    query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
+      problemsetQuestionList(categorySlug: $categorySlug, limit: $limit, skip: $skip, filters: $filters) {
+        total hasMore
+        questions { frontendQuestionId title titleCn titleSlug paidOnly }
+      }
+    }
+    """#
+
+    static let studyPlanQuery = #"""
+    query studyPlanDetail($slug: String!) {
+      userStatus { isSignedIn username realName avatar userSlug isPremium }
+      studyPlanV2Detail(planSlug: $slug) {
+        name slug description
+        planSubGroups {
+          slug name
+          questions {
+            titleSlug title translatedTitle questionFrontendId difficulty status paidOnly
+            topicTags { name nameTranslated slug }
+          }
+        }
+      }
+    }
+    """#
 
     private static let workspaceQuery = #"""
     query questionWorkspace($titleSlug: String!) {

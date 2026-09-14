@@ -2377,7 +2377,7 @@ private struct EmbeddedLoginWebView: NSViewRepresentable {
               submissions = recent?.data?.submissionList?.submissions || [];
             }
             const planResult = account.isSignedIn
-              ? await gql(`query studyPlanDetail($slug:String!){studyPlanV2Detail(planSlug:$slug){name slug description planSubGroups{slug name questions{titleSlug title translatedTitle questionFrontendId difficulty status paidOnly topicTags{name nameTranslated slug}}}}}`, {slug: planSlug})
+              ? await gql(planQuery, {slug: planSlug})
               : {};
             return JSON.stringify({account, submissions, studyPlan: planResult?.data?.studyPlanV2Detail || null});
             """
@@ -2386,7 +2386,7 @@ private struct EmbeddedLoginWebView: NSViewRepresentable {
                 defer { self.isChecking = false }
                 guard let raw = try? await webView.callAsyncJavaScript(
                     script,
-                    arguments: ["planSlug": self.parent.leetcodePlanSlug],
+                    arguments: ["planSlug": self.parent.leetcodePlanSlug, "planQuery": LeetCodeAPIClient.studyPlanQuery],
                     in: nil,
                     contentWorld: .page
                 ),

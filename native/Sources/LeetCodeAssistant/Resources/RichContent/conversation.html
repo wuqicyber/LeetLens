@@ -13,7 +13,7 @@
     /* 回到底部：圆形箭头。槽位和 SwiftUI composer 同一条中轴：
        左 0、右 context-panel-inset，不用 100vw（WKWebView 里 vw 经常比列宽更宽）。 */
     #jump-latest-slot {
-      position: fixed; left: 0; right: var(--context-panel-inset); bottom: 106px; z-index: 40;
+      position: fixed; left: 0; right: var(--context-panel-inset); bottom: calc(var(--conversation-bottom-inset, 122px) - 16px); z-index: 40;
       display: flex; justify-content: center; pointer-events: none;
     }
     #jump-latest {
@@ -35,7 +35,7 @@
     html, body { margin: 0; min-height: 100%; background: Canvas; color: color-mix(in srgb, CanvasText 88%, transparent); }
     /* 中轴列与原生 composer 同宽（AppDesign.Size.composerMaximum = 820），两者共用一根中轴 */
     body {
-      padding: 46px calc(var(--conversation-inline-inset) + var(--context-panel-inset)) 122px var(--conversation-inline-inset);
+      padding: 46px calc(var(--conversation-inline-inset) + var(--context-panel-inset)) var(--conversation-bottom-inset, 122px) var(--conversation-inline-inset);
       transition: padding-left 220ms ease-in-out, padding-right 220ms ease-in-out;
     }
     #messages { display: grid; gap: 26px; }

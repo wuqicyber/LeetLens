@@ -22,6 +22,8 @@ enum ConversationCodeBlockStyle {
 }
 
 struct RichConversationWebView: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
+    let conversationID: String?
     let messages: [ConversationTranscriptMessage]
     let conversationRevision: ConversationRevision?
     let generation: ConversationGenerationSnapshot?
@@ -35,6 +37,7 @@ struct RichConversationWebView: NSViewRepresentable {
     let contentTrailingInset: CGFloat
     /// 左侧问题刻度条占掉的一条，作为正文左内缩的下限下发给页面。
     var contentLeadingInset: CGFloat = 0
+    var contentBottomInset: CGFloat = 122
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -56,9 +59,11 @@ struct RichConversationWebView: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.underPageBackgroundColor = .clear
+        webView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         webView.allowsMagnification = true
         webView.magnification = 1
         context.coordinator.webView = webView
+        context.coordinator.conversationID = conversationID
         context.coordinator.messages = messages
         context.coordinator.conversationRevision = conversationRevision
         context.coordinator.generation = generation
@@ -68,11 +73,14 @@ struct RichConversationWebView: NSViewRepresentable {
         context.coordinator.onAgentJump = onAgentJump
         context.coordinator.contentTrailingInset = contentTrailingInset
         context.coordinator.contentLeadingInset = contentLeadingInset
+        context.coordinator.contentBottomInset = contentBottomInset
         context.coordinator.loadTemplate()
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+        context.coordinator.conversationID = conversationID
         context.coordinator.messages = messages
         context.coordinator.conversationRevision = conversationRevision
         context.coordinator.generation = generation
@@ -82,6 +90,7 @@ struct RichConversationWebView: NSViewRepresentable {
         context.coordinator.onAgentJump = onAgentJump
         context.coordinator.updateContentTrailingInset(contentTrailingInset)
         context.coordinator.updateContentLeadingInset(contentLeadingInset)
+        context.coordinator.updateContentBottomInset(contentBottomInset)
         context.coordinator.renderIfNeeded()
         context.coordinator.scrollToQuestionIfNeeded(scrollTargetID, revision: scrollTargetRevision)
     }
@@ -89,6 +98,7 @@ struct RichConversationWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var messages: [ConversationTranscriptMessage] = []
+        var conversationID: String?
         var conversationRevision: ConversationRevision?
         var generation: ConversationGenerationSnapshot?
         var onQuestionActivity: ((String, Bool) -> Void)?
@@ -97,10 +107,13 @@ struct RichConversationWebView: NSViewRepresentable {
         var onAgentJump: ((String, String) -> Void)?
         var contentTrailingInset: CGFloat = 0
         var contentLeadingInset: CGFloat = 0
+        var contentBottomInset: CGFloat = 122
+        private var appliedContentBottomInset: CGFloat?
         private var appliedContentLeadingInset: CGFloat?
         private var isReady = false
         private var appliedContentTrailingInset: CGFloat?
         private var renderedRevision: ConversationRevision?
+        private var renderedConversationID: String?
         private var renderedGenerationSignature = ""
         private var renderedGenerationID: String?
         private var lastScrollTargetID: String?
@@ -111,11 +124,11 @@ struct RichConversationWebView: NSViewRepresentable {
 
         func loadTemplate() {
             guard let webView else { return }
-            let templateURL = Bundle.module.url(
+            let templateURL = Bundle.appResources.url(
                 forResource: "conversation",
                 withExtension: "html",
                 subdirectory: "RichContent"
-            ) ?? Bundle.module.url(forResource: "conversation", withExtension: "html")
+            ) ?? Bundle.appResources.url(forResource: "conversation", withExtension: "html")
             guard let templateURL else { return }
             webView.loadFileURL(
                 templateURL,
@@ -127,6 +140,7 @@ struct RichConversationWebView: NSViewRepresentable {
             isReady = true
             updateContentTrailingInset(contentTrailingInset, force: true)
             updateContentLeadingInset(contentLeadingInset, force: true)
+            updateContentBottomInset(contentBottomInset, force: true)
             renderIfNeeded(force: true)
         }
 
@@ -146,6 +160,19 @@ struct RichConversationWebView: NSViewRepresentable {
                     arguments: ["pixels": Double(inset)],
                     in: nil,
                     contentWorld: .page
+                )
+            }
+        }
+
+        func updateContentBottomInset(_ inset: CGFloat, force: Bool = false) {
+            contentBottomInset = inset
+            guard isReady, force || appliedContentBottomInset.map({ abs($0 - inset) > 1 }) != false,
+                  let webView else { return }
+            appliedContentBottomInset = inset
+            Task { @MainActor in
+                _ = try? await webView.callAsyncJavaScript(
+                    "document.documentElement.style.setProperty('--conversation-bottom-inset', `${pixels}px`)",
+                    arguments: ["pixels": Double(inset)], in: nil, contentWorld: .page
                 )
             }
         }
@@ -290,10 +317,11 @@ struct RichConversationWebView: NSViewRepresentable {
             guard let webView else { return }
             lastRenderAt = Date()
             let generationSignature = generation.map(Self.generationSignature) ?? ""
-            let baseChanged = force || renderedRevision != conversationRevision
+            let baseChanged = force || renderedConversationID != conversationID || renderedRevision != conversationRevision
             guard baseChanged || generationSignature != renderedGenerationSignature else { return }
             let previousGenerationID = renderedGenerationID
             renderedRevision = conversationRevision
+            renderedConversationID = conversationID
             renderedGenerationSignature = generationSignature
             renderedGenerationID = generation?.messageID
             Task { @MainActor in

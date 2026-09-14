@@ -66,6 +66,7 @@ enum LeetCodeEditorLanguage {
 }
 
 struct LeetCodeCodeEditor: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var code: String
     let language: String
     @Binding var diagnostics: LeetCodeEditorDiagnostics
@@ -94,12 +95,13 @@ struct LeetCodeCodeEditor: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.underPageBackgroundColor = .clear
+        webView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         context.coordinator.webView = webView
         context.coordinator.updateCompletionStatus(
             RemoteCodeCompletionService.shared.isConfigured ? .offline("远程服务等待首次补全请求") : .localOnly
         )
-        if let editorURL = Bundle.module.url(forResource: "editor", withExtension: "html"),
-           let resourceURL = Bundle.module.resourceURL {
+        if let editorURL = Bundle.appResources.url(forResource: "editor", withExtension: "html"),
+           let resourceURL = Bundle.appResources.resourceURL {
             webView.loadFileURL(editorURL, allowingReadAccessTo: resourceURL)
         } else {
             context.coordinator.updateLoadStatus(.failed("代码编辑器资源未打包"))
@@ -109,6 +111,7 @@ struct LeetCodeCodeEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         context.coordinator.parent = self
         context.coordinator.synchronize()
     }
@@ -242,6 +245,7 @@ struct LeetCodeCodeEditor: NSViewRepresentable {
             let normalizedLanguage = LeetCodeEditorLanguage.normalized(parent.language)
             if force || parent.code != lastWebCode || normalizedLanguage != lastLanguage {
                 lastLanguage = normalizedLanguage
+                lastWebCode = parent.code
                 callJavaScript(
                     "window.editorBridge.setValue(code, language)",
                     arguments: ["code": parent.code, "language": normalizedLanguage]

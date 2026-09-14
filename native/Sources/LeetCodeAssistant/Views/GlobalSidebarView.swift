@@ -8,6 +8,7 @@ struct GlobalSidebarView: View {
     // 简报**不在**默认展开集合里：它一天长一条，展开着会把真正的会话挤到看不见。
     @State private var expandedGroups: Set<SidebarGroup> = [.learning, .conversations, .plans]
     @State private var pendingConversationDeletion: ConversationSummary?
+    @State private var operationError: String?
     /// 账户行那个 `Menu` 必须拿到显式宽度，见 `accountMenu` 的注释。
     @State private var sidebarWidth = AppDesign.Size.sidebarIdeal
 
@@ -27,7 +28,7 @@ struct GlobalSidebarView: View {
                     navigationRow(.plan)
                     navigationRow(.review)
 
-                    groupHeader(.learning, title: "学习中心", systemImage: "folder")
+                    groupHeader(.learning, title: "工作区", systemImage: "folder")
                     if expandedGroups.contains(.learning) {
                         navigationRow(.library, indented: true)
                         navigationRow(.knowledge, indented: true)
@@ -58,7 +59,7 @@ struct GlobalSidebarView: View {
                     }
 
                     if !dataStore.leetCodePlans.isEmpty {
-                        groupHeader(.plans, title: "力扣题单", systemImage: "list.bullet.rectangle")
+                        groupHeader(.plans, title: "任务集合", systemImage: "list.bullet.rectangle")
                         if expandedGroups.contains(.plans) {
                             ForEach(dataStore.leetCodePlans) { plan in
                                 planRow(plan)
@@ -74,6 +75,8 @@ struct GlobalSidebarView: View {
             }
             .floatingScrollIndicators()
 
+            appearanceMenu
+                .padding(.horizontal, AppDesign.Spacing.xs)
             accountMenu
                 .padding(.horizontal, AppDesign.Spacing.xs)
                 .padding(.top, AppDesign.Spacing.xs)
@@ -81,6 +84,9 @@ struct GlobalSidebarView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
         .background(sidebarSurface.ignoresSafeArea())
+        .alert("操作未完成", isPresented: Binding(get: { operationError != nil }, set: { if !$0 { operationError = nil } })) {
+            Button("好", role: .cancel) { operationError = nil }
+        } message: { Text(operationError ?? "") }
         .confirmationDialog(
             "删除这个会话？",
             isPresented: Binding(
@@ -126,7 +132,7 @@ struct GlobalSidebarView: View {
         HStack(spacing: 6) {
             // 不用 fixedSize：列宽被压到最小宽以下时它会溢出并被裁掉，
             // 结果是品牌行整个消失、只剩右边的搜索键。
-            Text("LeetLens")
+            Text("Agent Workspace")
                 .font(AppDesign.Typography.sectionTitle)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -262,11 +268,15 @@ struct GlobalSidebarView: View {
 
     private func planRow(_ plan: LeetCodePlanSummary) -> some View {
         Button {
-            try? dataStore.selectLeetCodePlan(plan.id)
-            workspace.selectedSection = .leetCode
+            do { try workspace.showLeetCodeLibrary(planID: plan.id, dataStore: dataStore) }
+            catch { operationError = error.localizedDescription }
         } label: {
             HStack(spacing: 6) {
-                FadingSidebarText(plan.name)
+                FadingSidebarText(
+                    plan.name
+                        .replacingOccurrences(of: "LeetCode", with: "Agent")
+                        .replacingOccurrences(of: "力扣", with: "Agent")
+                )
                 Spacer(minLength: 4)
                 Text("\(plan.solvedCount)/\(plan.questionCount)")
                     .font(AppDesign.Typography.micro.monospacedDigit())
@@ -288,6 +298,32 @@ struct GlobalSidebarView: View {
         .buttonStyle(.plain)
     }
 
+    private var appearanceMenu: some View {
+        Menu {
+            ForEach([("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")], id: \.0) { value, title in
+                Button {
+                    do { try dataStore.saveAppearance(value, emphasizeMotion: dataStore.settings.emphasizeMotion) }
+                    catch { operationError = error.localizedDescription }
+                } label: {
+                    if dataStore.settings.appearance == value { Label(title, systemImage: "checkmark") }
+                    else { Text(title) }
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Label("外观", systemImage: colorScheme == .dark ? "moon" : "sun.max")
+                Spacer()
+                Text(dataStore.settings.appearance == "dark" ? "深色" : dataStore.settings.appearance == "light" ? "浅色" : "跟随系统")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption).padding(.horizontal, 10).frame(height: 32)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .frame(width: max(0, sidebarWidth - AppDesign.Spacing.xs * 2), height: 32)
+        .help("切换深色、浅色或跟随系统；立即应用并保存")
+        .accessibilityLabel("外观与深色模式")
+    }
+
     private var accountMenu: some View {
         Menu {
             Button("用量统计", systemImage: "chart.bar.xaxis") {
@@ -297,7 +333,7 @@ struct GlobalSidebarView: View {
             Button("账户连接", systemImage: "person.crop.circle") { workspace.presentSettings() }
             Button("设置", systemImage: "gearshape") { workspace.presentSettings() }
             Divider()
-            Button("退出 LeetLens", systemImage: "rectangle.portrait.and.arrow.right") {
+            Button("退出 Agent Workspace", systemImage: "rectangle.portrait.and.arrow.right") {
                 NSApplication.shared.terminate(nil)
             }
         } label: {

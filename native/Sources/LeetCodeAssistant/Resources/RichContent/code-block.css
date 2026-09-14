@@ -87,5 +87,11 @@ code { font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, monospace; f
 }
 @media (prefers-color-scheme: dark) {
   .hljs { color: #d7dce2; background: transparent; }
+  .hljs-keyword, .hljs-selector-tag { color: #c678dd; }
+  .hljs-string, .hljs-regexp, .hljs-addition { color: #98c379; }
+  .hljs-number, .hljs-literal, .hljs-attr { color: #d19a66; }
+  .hljs-title, .hljs-built_in { color: #61afef; }
+  .hljs-comment, .hljs-quote { color: #9aa2ae; }
+  .hljs-type, .hljs-symbol, .hljs-meta { color: #56b6c2; }
   .code-block { background: rgba(255,255,255,.035); }
 }

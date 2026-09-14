@@ -13,7 +13,7 @@ SCRIPT_DIR=${0:A:h}
 NATIVE_DIR=${SCRIPT_DIR:h}
 REPO_DIR=${NATIVE_DIR:h}
 
-APP_NAME=${APP_NAME:-LeetLens}
+APP_NAME=${APP_NAME:-Agent\ Workspace}
 BUNDLE_ID=${BUNDLE_ID:-io.github.huaxxlab.leetcode-ai-helper.native}
 SHORT_VERSION=${SHORT_VERSION:-$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" ${NATIVE_DIR}/App/Info.plist)}
 
@@ -56,16 +56,27 @@ COPYFILE_DISABLE=1 DEVELOPER_DIR=${DEVELOPER_DIR} xcrun swift build -c release -
     -Xlinker -platform_version -Xlinker macos \
     -Xlinker ${MACOS_MIN_VERSION} -Xlinker ${MACOS_SDK_VERSION}
 
+BIN_PATH=$(DEVELOPER_DIR=${DEVELOPER_DIR} xcrun swift build -c release --scratch-path ${SCRATCH_PATH} --show-bin-path 2>/dev/null || true)
+if [[ -f ${SCRATCH_PATH}/release/LeetCodeAssistant ]]; then
+    PRODUCTS_DIR=${SCRATCH_PATH}/release
+elif [[ -n ${BIN_PATH} && -f ${BIN_PATH}/LeetCodeAssistant ]]; then
+    PRODUCTS_DIR=${BIN_PATH}
+elif [[ -f ${SCRATCH_PATH}/out/Products/Release/LeetCodeAssistant ]]; then
+    PRODUCTS_DIR=${SCRATCH_PATH}/out/Products/Release
+else
+    PRODUCTS_DIR=$(dirname $(find ${SCRATCH_PATH} -name LeetCodeAssistant -type f | head -1))
+fi
+
 rm -rf ${STAGE_APP}
 mkdir -p ${CONTENTS_PATH}/MacOS ${CONTENTS_PATH}/Resources
-cp ${SCRATCH_PATH}/release/LeetCodeAssistant ${CONTENTS_PATH}/MacOS/LeetCodeAssistant
+cp ${PRODUCTS_DIR}/LeetCodeAssistant ${CONTENTS_PATH}/MacOS/LeetCodeAssistant
 cp ${NATIVE_DIR}/App/Info.plist ${CONTENTS_PATH}/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${APP_NAME}" ${CONTENTS_PATH}/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" ${CONTENTS_PATH}/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${SHORT_VERSION}" ${CONTENTS_PATH}/Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date +%Y%m%d%H%M%S)" ${CONTENTS_PATH}/Info.plist
 
-for RESOURCE_BUNDLE in ${SCRATCH_PATH}/release/*.bundle; do
+for RESOURCE_BUNDLE in ${PRODUCTS_DIR}/*.bundle; do
     [[ -d ${RESOURCE_BUNDLE} ]] || continue
     cp -R ${RESOURCE_BUNDLE} ${CONTENTS_PATH}/Resources/
 done
@@ -102,12 +113,12 @@ xattr -cr ${APP_PATH}
 # 签名的权威副本是临时目录里的 STAGE_APP，它上面已经校验过了；
 # 下面的 zip 与 dmg 也一律从 STAGE_APP 打包，dist 里这份只是给人双击用的。
 
-ZIP_PATH=${DIST_DIR}/LeetLens-mac-arm64.zip
+ZIP_PATH=${DIST_DIR}/${APP_NAME}-mac-arm64.zip
 ditto -c -k --sequesterRsrc --keepParent ${STAGE_APP} ${ZIP_PATH}
 
 # DMG：拖进「应用程序」即可安装。
 DMG_STAGE=${STAGE_ROOT}/dmg
-DMG_PATH=${DIST_DIR}/LeetLens-mac-arm64.dmg
+DMG_PATH=${DIST_DIR}/${APP_NAME}-mac-arm64.dmg
 rm -rf ${DMG_STAGE}
 mkdir -p ${DMG_STAGE}
 ditto --norsrc --noextattr ${STAGE_APP} ${DMG_STAGE}/${APP_NAME}.app

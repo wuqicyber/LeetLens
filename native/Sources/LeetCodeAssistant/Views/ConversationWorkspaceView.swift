@@ -7,16 +7,29 @@ struct ConversationWorkspaceView: View {
     var contentTrailingInset: CGFloat = 0
     /// 左侧问题刻度条占掉的一条：正文与输入框都从这里之后开始排。
     var contentLeadingInset: CGFloat = 0
+    var mountedConversationID: String? = nil
+    var problemContext: LeetCodeConversationContext? = nil
+    @State private var composerHeight: CGFloat = 60
+    @State private var navigationError: String?
+
+    private var selectedConversationID: String? { mountedConversationID ?? workspace.selectedConversationID }
+
+    private var draft: String {
+        get { workspace.conversationDraft(for: selectedConversationID) }
+        nonmutating set { workspace.setConversationDraft(newValue, for: selectedConversationID) }
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             RichConversationWebView(
+                conversationID: selectedConversationID,
                 messages: conversationMessages,
                 conversationRevision: selectedConversation?.revision,
                 generation: visibleGeneration,
-                scrollTargetID: workspace.questionScrollTargetID,
-                scrollTargetRevision: workspace.questionScrollRequestVersion,
+                scrollTargetID: mountedConversationID == nil ? workspace.questionScrollTargetID : nil,
+                scrollTargetRevision: mountedConversationID == nil ? workspace.questionScrollRequestVersion : 0,
                 onQuestionActivity: { id, isScrolling in
+                    guard mountedConversationID == nil else { return }
                     workspace.updateQuestionNavigation(activeID: id, userIsScrolling: isScrolling)
                 },
                 onOpenURL: { url in
@@ -25,19 +38,32 @@ struct ConversationWorkspaceView: View {
                 onRetry: retryGeneration,
                 onAgentJump: handleAgentJump,
                 contentTrailingInset: contentTrailingInset,
-                contentLeadingInset: contentLeadingInset
+                contentLeadingInset: contentLeadingInset,
+                contentBottomInset: max(122, composerHeight + 24)
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .opacity(isEmptyConversation ? 0 : 1)
             .allowsHitTesting(!isEmptyConversation)
 
-            if isEmptyConversation {
+            if isEmptyConversation, mountedConversationID == nil {
                 ConversationEmptyStateView {
                     composer
                         .padding(.leading, contentLeadingInset)
                         .padding(.trailing, contentTrailingInset)
                 }
             } else {
+                if isEmptyConversation {
+                    VStack(spacing: 8) {
+                        Image(systemName: "bubble.left.and.bubble.right").font(.title2)
+                        Text("与 Agent 讨论这道题").font(.headline)
+                        Text("每次发送会附带当前题目和未提交代码快照，仅用于本次请求。")
+                            .font(.caption).multilineTextAlignment(.center)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(24)
+                    .padding(.bottom, 100)
+                    .frame(maxHeight: .infinity)
+                }
                 composer
                     .padding(.leading, contentLeadingInset)
                     .padding(.trailing, contentTrailingInset)
@@ -48,8 +74,11 @@ struct ConversationWorkspaceView: View {
         // 每一帧补间都等于一次整页重排。第三列展开时列宽本来就在逐帧变，
         // 叠上补间就是稳定卡死。位置跳变一次远比卡住半秒好。
         .transaction(value: contentTrailingInset) { $0.animation = nil }
+        .alert("题目未打开", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
+            Button("好", role: .cancel) { navigationError = nil }
+        } message: { Text(navigationError ?? "") }
         .task(id: dataStore.isDataReady) {
-            guard dataStore.isDataReady else { return }
+            guard dataStore.isDataReady, mountedConversationID == nil else { return }
             presentDailyBriefIfNeeded()
         }
     }
@@ -59,10 +88,15 @@ struct ConversationWorkspaceView: View {
     }
 
     private var composer: some View {
-        ComposerView(
+        let id = selectedConversationID
+        return ComposerView(
             workspace: workspace,
             dataStore: dataStore,
+            draft: Binding(get: { workspace.conversationDraft(for: id) }, set: { workspace.setConversationDraft($0, for: id) }),
+            pendingArtifacts: Binding(get: { workspace.conversationArtifacts(for: id) }, set: { workspace.setConversationArtifacts($0, for: id) }),
             conversation: selectedConversation,
+            compact: mountedConversationID != nil,
+            additionalContext: requestProblemContext(conversationID: id ?? "") ?? "",
             isGenerating: visibleGeneration?.phase == .generating,
             isBusyElsewhere: workspace.conversationGeneration?.phase == .generating && visibleGeneration == nil,
             queuedDrafts: visibleQueuedDrafts,
@@ -73,12 +107,13 @@ struct ConversationWorkspaceView: View {
             onInterruptAndSendQueue: interruptAndSendQueue
         )
         .frame(maxWidth: AppDesign.Size.contentColumnMaximum)
-        .padding(.horizontal, AppDesign.Spacing.lg)
+        .padding(.horizontal, mountedConversationID == nil ? AppDesign.Spacing.lg : 10)
         .frame(maxWidth: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
     }
 
     private var selectedConversation: ConversationSummary? {
-        guard let id = workspace.selectedConversationID else { return nil }
+        guard let id = selectedConversationID else { return nil }
         return dataStore.conversations.first { $0.id == id }
     }
 
@@ -87,12 +122,12 @@ struct ConversationWorkspaceView: View {
     }
 
     private var visibleGeneration: ConversationGenerationSnapshot? {
-        guard workspace.conversationGeneration?.conversationID == workspace.selectedConversationID else { return nil }
+        guard workspace.conversationGeneration?.conversationID == selectedConversationID else { return nil }
         return workspace.conversationGeneration
     }
 
     private var visibleQueuedDrafts: [QueuedConversationDraft] {
-        workspace.queuedConversationID == workspace.selectedConversationID ? workspace.queuedConversationDrafts : []
+        workspace.queuedConversationID == selectedConversationID ? workspace.queuedConversationDrafts : []
     }
 
     /// 一天只新建一份简报；同一天重启 app 时选中已经存在的那份，而不是复制。
@@ -137,9 +172,9 @@ struct ConversationWorkspaceView: View {
     }
 
     private func sendDraft(artifacts: [ConversationArtifact]) {
-        let prompt = workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, workspace.conversationGeneration?.phase != .generating else { return }
-        workspace.draft = ""
+        draft = ""
 
         let userMessage = ConversationTranscriptMessage(
             id: Self.messageID(),
@@ -150,7 +185,7 @@ struct ConversationWorkspaceView: View {
         )
         do {
             let conversationID: String
-            if let selected = workspace.selectedConversationID {
+            if let selected = selectedConversationID {
                 conversationID = selected
                 try dataStore.appendMessage(userMessage, to: selected)
             } else {
@@ -159,8 +194,8 @@ struct ConversationWorkspaceView: View {
             }
             startGeneration(conversationID: conversationID, replacingMessageID: nil)
         } catch {
-            workspace.draft = prompt
-            showLocalFailure(error.localizedDescription, conversationID: workspace.selectedConversationID ?? "")
+            draft = prompt
+            showLocalFailure(error.localizedDescription, conversationID: selectedConversationID ?? "")
         }
     }
 
@@ -194,6 +229,8 @@ struct ConversationWorkspaceView: View {
         )
 
         let service = ChatService(dataDirectory: dataStore.dataDirectory)
+        // Freeze at send/retry/queue dispatch, before asynchronous memory retrieval.
+        let taskContextSnapshot = requestProblemContext(conversationID: conversationID) ?? ""
         let batcher = ConversationStreamBatcher { [weak workspace] delta in
             guard let workspace,
                   workspace.conversationGeneration?.conversationID == conversationID,
@@ -231,7 +268,8 @@ struct ConversationWorkspaceView: View {
                     excluding: replacingMessageID,
                     memoryPrompts: memory.prompts,
                     continuityPrompt: continuityPrompt,
-                    runtimeIdentity: runtimeIdentity
+                    runtimeIdentity: runtimeIdentity,
+                    taskContextSnapshot: taskContextSnapshot
                 )
                 // 工具跑在主线程拍下的这份快照上：`LegacyDataStore` 是 @MainActor 的，
                 // 而 ReAct 循环在后台任务里；快照也保证一轮对话里模型看到的数据前后一致。
@@ -245,6 +283,7 @@ struct ConversationWorkspaceView: View {
                     agentTools: Self.agentToolExecutor(
                         snapshot: toolContext,
                         dataStore: dataStore,
+                        workspace: workspace,
                         conversationID: conversationID
                     )
                 ) {
@@ -381,13 +420,13 @@ struct ConversationWorkspaceView: View {
     }
 
     private func enqueueDraft(artifacts: [ConversationArtifact]) {
-        let prompt = workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty,
               let current = workspace.conversationGeneration,
               current.phase == .generating,
-              current.conversationID == workspace.selectedConversationID
+              current.conversationID == selectedConversationID
         else { return }
-        workspace.draft = ""
+        draft = ""
         workspace.queuedConversationID = current.conversationID
         workspace.queuedConversationDrafts.append(QueuedConversationDraft(text: prompt, artifacts: artifacts))
     }
@@ -436,12 +475,13 @@ struct ConversationWorkspaceView: View {
         }
     }
 
-    private func requestHistory(
+    func requestHistory(
         conversationID: String,
         excluding messageID: String?,
         memoryPrompts: [String],
         continuityPrompt: String?,
-        runtimeIdentity: ConversationRuntimeIdentity
+        runtimeIdentity: ConversationRuntimeIdentity,
+        taskContextSnapshot: String? = nil
     ) -> [ChatRequestMessage] {
         // 工具是"能力"，不是"义务"：不把它写成必须调用，否则问"快排怎么写"
         // 也会先去翻一遍题库，白花时间和 token。
@@ -454,6 +494,7 @@ struct ConversationWorkspaceView: View {
             - 问题牵涉到"我"（我以前怎么错的、我掌握得怎么样、我今天该做什么）时先查，不要凭空猜。
             - 讲一道具体题目前，先看他在这道题上的提交轨迹，针对他真实犯过的错来讲。
             - 纯知识性问题（"快排怎么写"）直接回答，不必调用工具。
+            - 用户要求或你准备说“打开、进入、开始做某题”时，必须先调用 open_problem；只有工具成功后才能说已打开，不能只输出操作文字或让用户再点击卡片。找不到或有歧义时说明错误并请用户明确题号。
             - 需要别人的解法时，先 search_leetcode_solutions 拿到 slug，再 read_leetcode_solution 读正文，            不要只看标题就下结论。
 
             工具返回的是事实数据，据此作答；查不到就直说查不到，不要编造他的学习记录。
@@ -467,12 +508,37 @@ struct ConversationWorkspaceView: View {
         let continuity = continuityPrompt.map {
             [ChatRequestMessage(role: "system", content: $0)]
         } ?? []
+        let taskPrompt = taskContextSnapshot ?? requestProblemContext(conversationID: conversationID) ?? ""
+        let taskMessages = taskPrompt.isEmpty ? [] : [ChatRequestMessage(role: "system", content: taskPrompt)]
+        var contextSettings = dataStore.settings
+        contextSettings.reservedOutputTokens += Double(ConversationContextEstimator.estimateTextTokens(taskPrompt))
         let managed = ConversationContextManager.build(
             messages: conversation.messages.filter { $0.id != messageID },
             contextSummary: conversation.contextSummary,
-            settings: dataStore.settings
+            settings: contextSettings
         )
-        return [system, identity] + memory + continuity + managed
+        return [system, identity] + memory + continuity + taskMessages + managed
+    }
+
+    func requestProblemContext(conversationID: String) -> String? {
+        guard mountedConversationID == conversationID, let problemContext else {
+            return dataStore.conversations.first { $0.id == conversationID }?.leetCodeContext?.prompt
+        }
+        // The previous stream owns queue dispatch. Resolve live selection here so
+        // queued messages do not inherit its earlier question/language value.
+        let slug = workspace.leetCodeWorkbench.selectedQuestionSlug ?? problemContext.titleSlug
+        guard dataStore.mountedConversation(for: slug)?.id == conversationID else { return nil }
+        let language = workspace.leetCodeWorkbench.selectedQuestionSlug == nil ? problemContext.language : workspace.leetCodeWorkbench.language
+        let context = dataStore.leetCodeConversationContext(for: slug, language: language) ?? problemContext
+        guard context.titleSlug == slug, context.language == language else { return nil }
+        let drafts = dataStore.leetCodeDrafts
+        guard drafts.canEdit, drafts.key == .init(titleSlug: context.titleSlug, language: context.language) else {
+            return context.prompt + "\n【本次未附带代码：编辑器正在切换或草稿无法读取，请勿假设其内容。】"
+        }
+        // ponytail: cap at 40k characters and 40% of the configured input budget;
+        // explicitly mark truncation rather than introducing code retrieval storage.
+        let limit = min(40_000, max(0, Int((dataStore.settings.contextWindowTokens - dataStore.settings.reservedOutputTokens) * 0.4)))
+        return context.prompt(draft: drafts.code, limit: limit)
     }
 
     /// 工具卡片上的跳转。`kind` 决定落到哪个页面，`id` 是那个页面要选中的东西。
@@ -485,8 +551,15 @@ struct ConversationWorkspaceView: View {
             if !id.isEmpty { workspace.selectedLearningRecordID = id }
             workspace.selectedSection = .knowledge
         case "leetcode":
-            if !id.isEmpty { workspace.pendingLeetCodeSlug = id }
-            workspace.selectedSection = .leetCode
+            guard !id.isEmpty else { return }
+            let sourceID = selectedConversationID
+            Task { @MainActor in
+                do {
+                    try await workspace.openLeetCodeProblem(id, dataStore: dataStore, sourceConversationID: sourceID)
+                } catch {
+                    navigationError = error.localizedDescription
+                }
+            }
         case "conversation":
             if !id.isEmpty { workspace.selectedConversationID = id }
             workspace.selectedSection = .conversation
@@ -504,10 +577,12 @@ struct ConversationWorkspaceView: View {
     /// ReAct 工具执行器。把 `LearningAgentTools` 需要的三条外部能力接上：
     /// 跨会话检索、题解列表、题解正文。前者走本地 RAG，后两者走力扣公开接口。
     @MainActor
-    private static func agentToolExecutor(
+    static func agentToolExecutor(
         snapshot: AgentDataSnapshot,
         dataStore: LegacyDataStore,
-        conversationID: String
+        workspace: WorkspaceState,
+        conversationID: String,
+        leetCodeClient: LeetCodeAPIClient = .shared
     ) -> AgentToolExecutor {
         { name, arguments in
             await LearningAgentTools.run(
@@ -547,6 +622,11 @@ struct ConversationWorkspaceView: View {
                 },
                 videoSearch: { query in
                     await BilibiliAPIClient.search(query: query)
+                },
+                openProblem: { query in
+                    try await workspace.openLeetCodeProblem(
+                        query, dataStore: dataStore, client: leetCodeClient, sourceConversationID: conversationID
+                    )
                 }
             ).json
         }
@@ -844,7 +924,11 @@ private struct BraunClockView: View {
 private struct ComposerView: View {
     @Bindable var workspace: WorkspaceState
     @Bindable var dataStore: LegacyDataStore
+    @Binding var draft: String
+    @Binding var pendingArtifacts: [ConversationArtifact]
     let conversation: ConversationSummary?
+    let compact: Bool
+    let additionalContext: String
     let isGenerating: Bool
     let isBusyElsewhere: Bool
     let queuedDrafts: [QueuedConversationDraft]
@@ -857,7 +941,6 @@ private struct ComposerView: View {
     @State private var showsReasoning = false
     @State private var showsContextUsage = false
     @State private var showsImageImporter = false
-    @State private var pendingArtifacts: [ConversationArtifact] = []
     @State private var contextDismissTask: Task<Void, Never>?
     @State private var showsModelList = false
     /// 全局缓存 + 落盘，见 `ModelCatalog`：不再每次打开会话都重拉模型列表。
@@ -870,7 +953,7 @@ private struct ComposerView: View {
     private var contextUsage: ContextUsageSnapshot {
         workspace.contextUsage(
             for: conversation,
-            draft: workspace.draft,
+            draft: [additionalContext, draft].filter { !$0.isEmpty }.joined(separator: "\n\n"),
             settings: dataStore.settings
         )
     }
@@ -883,71 +966,27 @@ private struct ComposerView: View {
             }
 
             HStack(alignment: .center, spacing: 9) {
-            Button { showsImageImporter = true } label: {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "plus")
-                        .frame(width: 28, height: 28)
-                    if !pendingArtifacts.isEmpty {
-                        Text("\(pendingArtifacts.count)")
-                            .font(.appScaled(size: 8, weight: .bold).monospacedDigit())
-                            .foregroundStyle(.white)
-                            .frame(minWidth: 13, minHeight: 13)
-                            .background(Color.accentColor, in: Circle())
-                    }
+                attachmentButton
+                inputField
+                if !compact {
+                    modelPicker
+                    contextMeter
+                    reasoningButton
                 }
-            }
-            .buttonStyle(.plain)
-            .help(pendingArtifacts.isEmpty ? "添加图片" : "已添加 \(pendingArtifacts.count) 张图片")
-            .disabled(isBusyElsewhere)
-
-            TextField(composerPlaceholder, text: $workspace.draft, axis: .vertical)
-                .font(.body)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .floatingTextScrollIndicators()
-                .focused($isComposerFocused)
-                .padding(.vertical, 5)
-                .onSubmit { primaryAction() }
-                .disabled(isBusyElsewhere)
-
-            // 把右侧操作组贴近发送键，空余宽度全部留给输入区；
-            // 模型选择不再停在输入框中段。
-            Spacer(minLength: AppDesign.Spacing.xs)
-
-            modelPicker
-
-            contextMeter
-
-            Button { showsReasoning.toggle() } label: {
-                HStack(spacing: 5) {
-                    Text(workspace.reasoningLevel.title)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .rotationEffect(.degrees(showsReasoning ? 180 : 0))
-                }
-                .frame(minWidth: 44, minHeight: 28)
-            }
-            .buttonStyle(.plain)
-            .popover(isPresented: $showsReasoning, arrowEdge: .bottom) {
-                ReasoningPopover(workspace: workspace)
-            }
-            .help("推理强度")
-
-            Button(action: primaryAction) {
-                Image(systemName: sendButtonSymbol)
-                    .font(.appScaled(size: sendButtonSymbol == "stop.fill" ? 10 : 13, weight: .semibold))
-                    .contentTransition(.symbolEffect(.replace))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(sendButtonColor, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(sendButtonDisabled)
-            .help(sendButtonHelp)
-            .keyboardShortcut(.return, modifiers: .command)
+                sendButton
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
+            if compact {
+                HStack(spacing: 8) {
+                    modelPicker
+                    contextMeter
+                    reasoningButton
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            }
         }
         .frame(minHeight: AppDesign.Size.composerMinimumHeight)
         .navigationGlass(cornerRadius: AppDesign.Radius.composer, interactive: true)
@@ -966,6 +1005,69 @@ private struct ComposerView: View {
             contextDismissTask?.cancel()
             contextDismissTask = nil
         }
+    }
+
+    private var attachmentButton: some View {
+        Button { showsImageImporter = true } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "plus")
+                    .frame(width: 28, height: 28)
+                if !pendingArtifacts.isEmpty {
+                    Text("\(pendingArtifacts.count)")
+                        .font(.appScaled(size: 8, weight: .bold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 13, minHeight: 13)
+                        .background(Color.accentColor, in: Circle())
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help(pendingArtifacts.isEmpty ? "添加图片" : "已添加 \(pendingArtifacts.count) 张图片")
+        .disabled(isBusyElsewhere)
+    }
+
+    private var inputField: some View {
+        TextField(composerPlaceholder, text: $draft, axis: .vertical)
+            .font(.body)
+            .textFieldStyle(.plain)
+            .lineLimit(1...5)
+            .floatingTextScrollIndicators()
+            .focused($isComposerFocused)
+            .padding(.vertical, 5)
+            .onSubmit { primaryAction() }
+            .disabled(isBusyElsewhere)
+    }
+
+    private var reasoningButton: some View {
+        Button { showsReasoning.toggle() } label: {
+            HStack(spacing: 5) {
+                Text(workspace.reasoningLevel.title)
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+                    .rotationEffect(.degrees(showsReasoning ? 180 : 0))
+            }
+            .frame(minWidth: 44, minHeight: 28)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showsReasoning, arrowEdge: .bottom) {
+            ReasoningPopover(workspace: workspace)
+        }
+        .help("推理强度")
+    }
+
+    private var sendButton: some View {
+        Button(action: primaryAction) {
+            Image(systemName: sendButtonSymbol)
+                .font(.appScaled(size: sendButtonSymbol == "stop.fill" ? 10 : 13, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(sendButtonColor, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(sendButtonDisabled)
+        .help(sendButtonHelp)
+        .keyboardShortcut(.return, modifiers: .command)
     }
 
     private var queueStatus: some View {
@@ -994,7 +1096,7 @@ private struct ComposerView: View {
     }
 
     private var hasDraft: Bool {
-        !workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var composerPlaceholder: String {
@@ -1204,7 +1306,7 @@ private struct ComposerView: View {
 
     private var sendButtonColor: Color {
         if isGenerating { return .primary }
-        return workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .accentColor
+        return draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .accentColor
     }
 
     private var contextMeter: some View {
@@ -1246,7 +1348,7 @@ private struct ComposerView: View {
     }
 
     private func submit() {
-        let hasPrompt = !workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasPrompt = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         onSend(pendingArtifacts)
         if hasPrompt {
             pendingArtifacts.removeAll()

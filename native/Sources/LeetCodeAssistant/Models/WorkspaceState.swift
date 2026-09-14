@@ -19,13 +19,13 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .conversation: "新建会话"
-        case .leetCode: "刷题"
-        case .plan: "学习计划"
-        case .review: "今日复习"
-        case .library: "学习题库"
-        case .knowledge: "知识图谱"
-        case .insights: "学习洞察"
-        case .templates: "算法模板"
+        case .leetCode: "任务工作台"
+        case .plan: "计划"
+        case .review: "待处理"
+        case .library: "任务库"
+        case .knowledge: "知识库"
+        case .insights: "运行洞察"
+        case .templates: "工作流模板"
         case .trash: "回收站"
         }
     }
@@ -33,7 +33,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable, Hashable {
     var systemImage: String {
         switch self {
         case .conversation: "square.and.pencil"
-        case .leetCode: "curlybraces.square"
+        case .leetCode: "square.grid.2x2"
         case .plan: "calendar"
         case .review: "clock.arrow.circlepath"
         case .library: "books.vertical"
@@ -145,6 +145,15 @@ final class WorkspaceState {
     private(set) var selectedToolItems: [ToolKind: ContextItem] = [:]
     var reasoningLevel: ReasoningLevel = .high
     var draft = ""
+    private var conversationDrafts: [String: String] = [:]
+    private var composerArtifacts: [String: [ConversationArtifact]] = [:]
+    var leetCodeWorkbench = LeetCodeWorkbenchPreferences() {
+        didSet {
+            if let data = try? JSONEncoder().encode(leetCodeWorkbench) {
+                preferences.set(data, forKey: Keys.leetCodeWorkbench)
+            }
+        }
+    }
     var hasPendingToolActivity = false
     var currentTaskID = "conversation"
     var selectedConversationID: String? {
@@ -153,6 +162,8 @@ final class WorkspaceState {
     var selectedLearningRecordID: String?
     /// 外部（工具卡片、洞察页）想让刷题页打开哪道题。刷题页取用后自行清空。
     var pendingLeetCodeSlug: String?
+    var leetCodeWorkbenchNotice: LeetCodeWorkbenchNotice?
+    @ObservationIgnored private var problemOpenRevision = 0
     var presentedSources: [ContextItem] = []
     var isSettingsPresented = false
     var isUsagePresented = false
@@ -270,6 +281,10 @@ final class WorkspaceState {
 
     init(preferences: UserDefaults = .standard) {
         self.preferences = preferences
+        if let data = preferences.data(forKey: Keys.leetCodeWorkbench),
+           let saved = try? JSONDecoder().decode(LeetCodeWorkbenchPreferences.self, from: data) {
+            leetCodeWorkbench = saved
+        }
         if preferences.object(forKey: Keys.sidebarRequested) != nil {
             sidebarRequested = preferences.bool(forKey: Keys.sidebarRequested)
         }
@@ -619,6 +634,110 @@ final class WorkspaceState {
         if userIsScrolling { questionRailPulse &+= 1 }
     }
 
+    func conversationDraft(for id: String?) -> String {
+        id.map { conversationDrafts[$0] ?? "" } ?? draft
+    }
+
+    func setConversationDraft(_ text: String, for id: String?) {
+        if let id { conversationDrafts[id] = text.isEmpty ? nil : text }
+        else { draft = text }
+    }
+
+    func conversationArtifacts(for id: String?) -> [ConversationArtifact] {
+        composerArtifacts[id ?? ""] ?? []
+    }
+
+    func setConversationArtifacts(_ artifacts: [ConversationArtifact], for id: String?) {
+        composerArtifacts[id ?? ""] = artifacts.isEmpty ? nil : artifacts
+    }
+
+    func reconcileConversations(_ liveIDs: Set<String>) {
+        conversationDrafts = conversationDrafts.filter { liveIDs.contains($0.key) }
+        composerArtifacts = composerArtifacts.filter { $0.key.isEmpty || liveIDs.contains($0.key) }
+        if let id = selectedConversationID, !liveIDs.contains(id) { selectedConversationID = nil }
+        if let id = queuedConversationID, !liveIDs.contains(id) {
+            queuedConversationID = nil
+            queuedConversationDrafts = []
+        }
+        if let generation = conversationGeneration, !liveIDs.contains(generation.conversationID) {
+            conversationGenerationTask?.cancel()
+            conversationGenerationTask = nil
+            conversationGeneration = nil
+        }
+    }
+
+    /// Manual and Agent opens share validation, local-first lookup, remote caching,
+    /// and navigation. Collections are never part of this write path.
+    @discardableResult
+    func openLeetCodeProblem(
+        _ query: String, dataStore: LegacyDataStore, client: LeetCodeAPIClient = .shared,
+        sourceConversationID: String? = nil
+    ) async throws -> AgentDataSnapshot.SlugTitle {
+        let input = try LeetCodeProblemInput(query)
+        problemOpenRevision &+= 1
+        let revision = problemOpenRevision
+        await dataStore.hydrate()
+        let problem: AgentDataSnapshot.SlugTitle
+        if let local = try AgentDataSnapshot.matchProblem(input, in: dataStore.leetCodeQuestionIndex, allowPartial: false) {
+            problem = local
+        } else {
+            problem = try await dataStore.resolveRemoteLeetCodeProblem(input, client: client)
+        }
+        // A conversation moves with the problem only after its statement loads.
+        // Manual local opens retain the existing lazy fetch and attachment.
+        if let sourceConversationID, dataStore.conversations.contains(where: { $0.id == sourceConversationID }),
+           dataStore.leetCodeWorkspaces[problem.slug]?.htmlContent.isEmpty != false {
+            _ = try await dataStore.fetchLeetCodeWorkspace(problem.slug, client: client)
+        }
+        try Task.checkCancellation()
+        guard revision == problemOpenRevision else { throw CancellationError() }
+        activateLeetCodeProblem(problem.slug, dataStore: dataStore)
+        if let sourceConversationID {
+            let previous = dataStore.mountedConversation(for: problem.slug)
+            if let source = dataStore.conversations.first(where: { $0.id == sourceConversationID }) {
+                do {
+                    if previous?.id != source.id { try dataStore.mountConversation(source.id, for: problem.slug) }
+                    leetCodeWorkbench.conversationCollapsed = false
+                    leetCodeWorkbenchNotice = .init(
+                        titleSlug: problem.slug,
+                        message: previous != nil && previous?.id != source.id
+                            ? "已接续「\(source.title)」。原会话「\(previous!.title)」仍完整保留。"
+                            : "已接续「\(source.title)」，可在题目旁继续对话。",
+                        previousConversationID: previous?.id == source.id ? nil : previous?.id
+                    )
+                } catch {
+                    leetCodeWorkbenchNotice = .init(titleSlug: problem.slug, message: "题目已打开，但会话挂载失败：\(error.localizedDescription)")
+                }
+            } else {
+                leetCodeWorkbenchNotice = .init(titleSlug: problem.slug, message: "题目已打开；来源会话已删除，保留此题原有挂载。")
+            }
+        }
+        pendingLeetCodeSlug = problem.slug
+        return problem
+    }
+
+    func activateLeetCodeProblem(_ slug: String, dataStore: LegacyDataStore) {
+        problemOpenRevision &+= 1
+        dataStore.leetCodeDrafts.flush()
+        if leetCodeWorkbench.selectedQuestionSlug != slug { leetCodeWorkbenchNotice = nil }
+        leetCodeWorkbench.selectedQuestionSlug = slug
+        leetCodeWorkbench.showsLibrary = false
+        leetCodeWorkbench.isSolving = true
+        pendingLeetCodeSlug = nil
+        selectedSection = .leetCode
+    }
+
+    func showLeetCodeLibrary(planID: String? = nil, dataStore: LegacyDataStore) throws {
+        if let planID { try dataStore.selectLeetCodePlan(planID) }
+        problemOpenRevision &+= 1
+        dataStore.leetCodeDrafts.flush()
+        pendingLeetCodeSlug = nil
+        leetCodeWorkbench.showsLibrary = true
+        leetCodeWorkbench.overviewSection = "library"
+        leetCodeWorkbenchNotice = nil
+        selectedSection = .leetCode
+    }
+
     func scrollToQuestion(_ id: String) {
         activeQuestionID = id
         questionScrollTargetID = id
@@ -720,6 +839,7 @@ final class WorkspaceState {
     }
 
     private enum Keys {
+        static let leetCodeWorkbench = "native.workspace.leetCodeWorkbench"
         static let sidebarRequested = "native.workspace.sidebarRequested"
         static let toolRequested = "native.workspace.toolRequested"
         static let sidebarColumnWidth = "native.workspace.sidebarColumnWidth"

@@ -66,6 +66,8 @@ struct ConversationSummary: Identifiable, Hashable, Sendable {
     var usage = ConversationUsage()
     var lastChatUsage = ConversationUsage()
     var isPinned = false
+    var mountedProblemSlugs: [String] = []
+    var leetCodeContext: LeetCodeConversationContext?
 
     /// 是不是每日学习简报。按简报那条消息的 id 前缀判定，不看标题——
     /// 标题会被 AI 改写，改完就认不出来了。
@@ -479,6 +481,7 @@ final class LegacyDataStore {
     private(set) var leetCodePlans: [LeetCodePlanSummary] = []
     private(set) var activeLeetCodePlanID = ""
     private(set) var leetCodeQuestions: [LeetCodeQuestion] = []
+    private(set) var leetCodeQuestionIndex: [AgentDataSnapshot.SlugTitle] = []
     private(set) var leetCodeProfile = LeetCodeProfile.empty
     private(set) var leetCodeSubmissions: [LeetCodeSubmission] = []
     private(set) var leetCodeActivity: [LeetCodeActivityDay] = []
@@ -499,6 +502,7 @@ final class LegacyDataStore {
     private(set) var lastReloadedAt = Date.distantPast
 
     let dataDirectory: URL
+    let leetCodeDrafts: LeetCodeDraftStore
 
     /// Construction stays O(1). Loading is `hydrate()`, which the root view drives
     /// after the window is on screen — the previous `reload()` here put the entire
@@ -506,6 +510,7 @@ final class LegacyDataStore {
     init(dataDirectory: URL? = nil) {
         let resolvedDirectory = dataDirectory ?? Self.defaultDataDirectory
         self.dataDirectory = resolvedDirectory
+        leetCodeDrafts = LeetCodeDraftStore(dataDirectory: resolvedDirectory)
         learningBridge = LearningEngineBridge(dataDirectory: resolvedDirectory)
         let layered = LayeredVectorStore(
             local: LocalVectorStore(dataDirectory: resolvedDirectory),
@@ -619,10 +624,60 @@ final class LegacyDataStore {
         reload()
     }
 
+    private func makeLeetCodeQuestionIndex() -> [AgentDataSnapshot.SlugTitle] {
+        let root = jsonObject(named: "leetcode-cn.json") as? [String: Any] ?? [:]
+        let plans = root["plans"] as? [String: [String: Any]] ?? [:]
+        let content = jsonObject(named: "leetcode-content.json") as? [String: Any] ?? [:]
+        let workspaces = content["workspaces"] as? [String: [String: Any]] ?? [:]
+        let questions = plans.values.flatMap { $0["questions"] as? [[String: Any]] ?? [] }
+            + workspaces.values.compactMap { ($0["value"] as? [String: Any])?["question"] as? [String: Any] }
+        return questions.compactMap { question in
+            let slug = question.string("titleSlug")
+            guard !slug.isEmpty else { return nil }
+            return AgentDataSnapshot.SlugTitle(
+                slug: slug,
+                title: question.string("translatedTitle", fallback: question.string("title")),
+                frontendID: question.string("frontendId", fallback: question.string("questionFrontendId")),
+                englishTitle: question.string("title")
+            )
+        } + leetCodeSubmissions.map {
+            AgentDataSnapshot.SlugTitle(slug: $0.titleSlug, title: $0.title, frontendID: $0.frontendID)
+        }.filter { !$0.slug.isEmpty }
+    }
+
     @discardableResult
-    func fetchLeetCodeWorkspace(_ titleSlug: String) async throws -> LeetCodeQuestionWorkspace {
-        let value = try await LeetCodeAPIClient.shared.fetchWorkspace(titleSlug: titleSlug)
-        var root = (jsonObject(named: "leetcode-content.json") as? [String: Any]) ?? [:]
+    func fetchLeetCodeWorkspace(_ titleSlug: String, client: LeetCodeAPIClient = .shared) async throws -> LeetCodeQuestionWorkspace {
+        let value = try await client.fetchWorkspace(titleSlug: titleSlug)
+        try Task.checkCancellation()
+        return try cacheLeetCodeWorkspace(value, titleSlug: titleSlug)
+    }
+
+    func resolveRemoteLeetCodeProblem(_ input: LeetCodeProblemInput, client: LeetCodeAPIClient) async throws -> AgentDataSnapshot.SlugTitle {
+        let value = try await client.resolveWorkspace(input)
+        try Task.checkCancellation()
+        guard let question = value["question"] as? [String: Any] else {
+            throw LeetCodeAPIError.invalidResponse("力扣返回的题面不完整")
+        }
+        let slug = question.string("titleSlug")
+        _ = try cacheLeetCodeWorkspace(value, titleSlug: slug)
+        return .init(slug: slug, title: question.string("translatedTitle", fallback: question.string("title")),
+                     frontendID: question.string("frontendId"), englishTitle: question.string("title"))
+    }
+
+    private func cacheLeetCodeWorkspace(_ value: [String: Any], titleSlug: String) throws -> LeetCodeQuestionWorkspace {
+        guard LeetCodeProblemInput.isValidSlug(titleSlug),
+              (value["question"] as? [String: Any])?["titleSlug"] as? String == titleSlug else {
+            throw LeetCodeAPIError.invalidResponse("题目标识无效，已停止保存题面")
+        }
+        var root: [String: Any]
+        do {
+            let data = try Data(contentsOf: dataDirectory.appending(path: "leetcode-content.json"))
+            guard let existing = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  existing["workspaces"] == nil || existing["workspaces"] is [String: Any] else {
+                throw LeetCodeAPIError.invalidResponse("本地题面缓存格式异常，已停止写入以保留原数据")
+            }
+            root = existing
+        } catch CocoaError.fileReadNoSuchFile { root = [:] }
         var workspaces = root["workspaces"] as? [String: Any] ?? [:]
         workspaces[titleSlug] = [
             "value": value,
@@ -1317,7 +1372,17 @@ final class LegacyDataStore {
         submissions incoming: [[String: Any]],
         studyPlan: [String: Any]? = nil
     ) throws {
-        var root = (jsonObject(named: "leetcode-cn.json") as? [String: Any]) ?? [:]
+        var root: [String: Any]
+        do {
+            let data = try Data(contentsOf: dataDirectory.appending(path: "leetcode-cn.json"))
+            guard let existing = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  existing["plans"] == nil || existing["plans"] is [String: Any] else {
+                throw LeetCodeAPIError.invalidResponse("本地任务集合数据格式异常，已停止同步以保留现有数据")
+            }
+            root = existing
+        } catch CocoaError.fileReadNoSuchFile {
+            root = [:]
+        }
         root["account"] = [
             "signedIn": account.bool("isSignedIn"),
             "username": account.string("username"),
@@ -1400,6 +1465,12 @@ final class LegacyDataStore {
         reload()
     }
 
+    func importLeetCodeStudyPlan(_ input: String) async throws {
+        let snapshot = try await LeetCodeAPIClient.shared.fetchStudyPlan(input)
+        try Task.checkCancellation()
+        try applyLeetCodeWebSync(account: snapshot.account, submissions: [], studyPlan: snapshot.studyPlan)
+    }
+
     func applyBilibiliWebLogin(userID: String, name: String = "", avatar: String = "") throws {
         let value: [String: Any] = [
             "signedIn": true,
@@ -1413,7 +1484,11 @@ final class LegacyDataStore {
     }
 
     @discardableResult
-    func createConversation(title: String, firstMessage: ConversationTranscriptMessage? = nil) throws -> String {
+    func createConversation(
+        title: String,
+        firstMessage: ConversationTranscriptMessage? = nil,
+        leetCodeContext: LeetCodeConversationContext? = nil
+    ) throws -> String {
         let id = "c_\(Int(Date.now.timeIntervalSince1970 * 1_000))_\(Self.shortIdentifier())"
         let messages = firstMessage.map { [Self.messageDictionary($0)] } ?? []
         try updateConversationFile { root in
@@ -1424,9 +1499,47 @@ final class LegacyDataStore {
                 "messages": messages,
                 "updatedAt": Int(Date.now.timeIntervalSince1970 * 1_000)
             ]
+            if let leetCodeContext {
+                var conversation = root[id] as? [String: Any] ?? [:]
+                conversation["leetCodeContext"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(leetCodeContext))
+                root[id] = conversation
+                try Self.mountConversation(id, for: leetCodeContext.titleSlug, in: &root)
+            }
         }
         reload()
         return id
+    }
+
+    func mountedConversation(for titleSlug: String) -> ConversationSummary? {
+        conversations.first { $0.mountedProblemSlugs.contains(titleSlug) }
+    }
+
+    func leetCodeConversationContext(for slug: String, language: String) -> LeetCodeConversationContext? {
+        guard let reference = leetCodeQuestionIndex.first(where: { $0.slug == slug }) else { return nil }
+        return .init(frontendID: reference.frontendID, title: reference.title, titleSlug: slug,
+                     statement: LeetCodeQuestionActionBar.plainText(leetCodeWorkspaces[slug]?.htmlContent ?? ""),
+                     language: language)
+    }
+
+    func mountConversation(_ conversationID: String?, for titleSlug: String) throws {
+        try updateConversationFile { root in
+            try Self.mountConversation(conversationID, for: titleSlug, in: &root)
+        }
+        reload()
+    }
+
+    private static func mountConversation(_ id: String?, for slug: String, in root: inout [String: Any]) throws {
+        guard !slug.isEmpty else { throw ConversationStoreError.invalidTitle }
+        if let id, root[id] as? [String: Any] == nil { throw ConversationStoreError.missingConversation }
+        for key in Array(root.keys) {
+            guard var conversation = root[key] as? [String: Any] else { continue }
+            let previous = conversation.stringArray("mountedProblemSlugs")
+            var slugs = previous.filter { $0 != slug }
+            if key == id { slugs.append(slug) }
+            guard slugs != previous else { continue }
+            conversation["mountedProblemSlugs"] = slugs
+            root[key] = conversation
+        }
     }
 
     func appendMessage(_ message: ConversationTranscriptMessage, to conversationID: String) throws {
@@ -1528,6 +1641,7 @@ final class LegacyDataStore {
             }
             let originalTitle = conversation["title"] as? String ?? "未命名会话"
             conversation["title"] = String("\(originalTitle) 副本".prefix(80))
+            conversation["mountedProblemSlugs"] = []
             conversation["pinned"] = false
             conversation["updatedAt"] = Int(Date.now.timeIntervalSince1970 * 1_000)
             root[newID] = conversation
@@ -2099,7 +2213,16 @@ final class LegacyDataStore {
             attributes: [.posixPermissions: 0o700]
         )
         let url = dataDirectory.appending(path: "conversations.json")
-        var root = (jsonObject(named: "conversations.json") as? [String: Any]) ?? [:]
+        var root: [String: Any]
+        do {
+            let data = try Data(contentsOf: url)
+            guard let existing = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw ConversationStoreError.missingConversation
+            }
+            root = existing
+        } catch CocoaError.fileReadNoSuchFile {
+            root = [:]
+        }
         try update(&root)
         let data = try JSONSerialization.data(withJSONObject: root, options: [])
         try data.write(to: url, options: .atomic)
@@ -2139,7 +2262,9 @@ final class LegacyDataStore {
             archivedMessageCount: previous.archivedMessageCount,
             usage: previous.usage,
             lastChatUsage: previous.lastChatUsage,
-            isPinned: previous.isPinned
+            isPinned: previous.isPinned,
+            mountedProblemSlugs: previous.mountedProblemSlugs,
+            leetCodeContext: previous.leetCodeContext
         )
         conversations.sort { $0.updatedAt > $1.updatedAt }
         scheduleMemoryIndexSync()
@@ -2240,7 +2365,12 @@ final class LegacyDataStore {
                 archivedMessageCount: value.int("archivedMessageCount"),
                 usage: Self.parseUsage(value["usage"]),
                 lastChatUsage: Self.parseUsage(value["lastChatUsage"]),
-                isPinned: value.bool("pinned")
+                isPinned: value.bool("pinned"),
+                mountedProblemSlugs: value.stringArray("mountedProblemSlugs"),
+                leetCodeContext: (value["leetCodeContext"] as? [String: Any]).flatMap {
+                    guard let data = try? JSONSerialization.data(withJSONObject: $0) else { return nil }
+                    return try? JSONDecoder().decode(LeetCodeConversationContext.self, from: data)
+                }
             )
         }
         .sorted {
@@ -2498,6 +2628,7 @@ final class LegacyDataStore {
             leetCodeSubmissionDetails = [:]
             leetCodeAnalysisTasks = [:]
             leetCodeAnalyses = [:]
+            loadLeetCodeContent()
             return
         }
         let account = root["account"] as? [String: Any] ?? [:]
@@ -2657,6 +2788,7 @@ final class LegacyDataStore {
     }
 
     private func loadLeetCodeContent() {
+        defer { leetCodeQuestionIndex = makeLeetCodeQuestionIndex() }
         guard let root = jsonObject(named: "leetcode-content.json") as? [String: Any] else {
             leetCodeWorkspaces = [:]
             leetCodeSubmissionDetails = [:]
