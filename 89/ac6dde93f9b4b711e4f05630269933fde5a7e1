@@ -1,0 +1,24 @@
+native/Sources/LeetCodeAssistant/Models/LegacyDataStore.swift
+  h_0cc3b7d7475c37 526-530,2051-2090
+native/Sources/LeetCodeAssistant/Services/ChatService.swift
+  h_0cc3b7d7475c37 3-25,1493-1560
+native/Sources/LeetCodeAssistant/Services/LearningEngineBridge.swift
+  h_0cc3b7d7475c37 19,23-24,125,135,137
+native/Sources/LeetCodeAssistant/Views/ConversationWorkspaceView.swift
+  h_0cc3b7d7475c37 398
+native/Sources/LeetCodeAssistant/Views/LearningCenterViews.swift
+  h_0cc3b7d7475c37 12,170-196,205-211,219-228
+native/Tests/LeetCodeAssistantTests/ChatServiceTests.swift
+  h_0cc3b7d7475c37 27-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "89ac6dde93f9b4b711e4f05630269933fde5a7e1",
+  "prompts": {},
+  "humans": {
+    "h_0cc3b7d7475c37": {
+      "author": "eleanor.zhu <eleanore.zhu@gmail.com>"
+    }
+  }
+}
