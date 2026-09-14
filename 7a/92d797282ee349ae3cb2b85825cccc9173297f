@@ -1,0 +1,16 @@
+native/Sources/LeetCodeAssistant/Resources/CodeEditor/editor.html
+  h_0cc3b7d7475c37 217-236
+native/Sources/LeetCodeAssistant/Views/KnowledgeGraphWebView.swift
+  h_0cc3b7d7475c37 164-173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "7a92d797282ee349ae3cb2b85825cccc9173297f",
+  "prompts": {},
+  "humans": {
+    "h_0cc3b7d7475c37": {
+      "author": "eleanor.zhu <eleanore.zhu@gmail.com>"
+    }
+  }
+}
